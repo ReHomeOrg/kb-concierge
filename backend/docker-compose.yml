@@ -1,0 +1,33 @@
+# Local dev stack для kb-concierge backend.
+# Запуск: `docker compose up -d postgres`
+# Остановка: `docker compose down`
+# Сброс volume: `docker compose down -v`
+#
+# Порт хоста 5435 (а не 5432/5433) — чтобы не конфликтовать с уже запущенными
+# на машине Postgres'ами rehome-kb-platform (5432) и kb-support test pg (5433).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: kbc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: kbconcierge
+      POSTGRES_USER: kbconcierge
+      POSTGRES_PASSWORD: devpass
+      # Включаем JIT для тяжёлых запросов; для dev допустимо.
+      PGOPTIONS: "-c jit=on"
+    ports:
+      - "5435:5432"
+    volumes:
+      - kbc_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kbconcierge -d kbconcierge"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  kbc_postgres_data:
+    driver: local

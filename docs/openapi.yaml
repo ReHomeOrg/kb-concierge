@@ -1,0 +1,250 @@
+openapi: 3.1.0
+info:
+  title: kb-concierge API
+  version: 0.1.0
+  description: >-
+    ИИ-агент-оркестратор экосистемы reHome «Консьерж» (ТЗ v1.1). Contract-first:
+    эта спецификация — источник истины для контрактных тестов. На M0 (каркас)
+    определены инфраструктурные пробы; доменные пути (/sessions, /policies,
+    /inbound) наполняются по эпикам M1+ под префиксом /api/v1/concierge.
+  contact:
+    name: ООО РЕХОМ
+
+servers:
+  - url: https://api.rehome.one
+    description: Production
+  - url: https://staging-api.rehome.one
+    description: Staging
+
+tags:
+  - name: Infrastructure
+    description: Liveness/readiness/metrics пробы (без префикса /api/v1).
+  - name: Sessions
+    description: Диалоговые сессии агента и реплики (turn-based).
+  - name: Policies
+    description: Политика автономности (staff).
+  - name: Inbound
+    description: Входящие (operator-reply из kb-support; SERVICE-only).
+
+# Глобально все операции требуют Keycloak Bearer JWT (aud: kb-concierge).
+# Публичные инфраструктурные пробы переопределяют пустым `security: []`.
+security:
+  - bearerAuth: []
+
+paths:
+  /healthz:
+    get:
+      tags: [Infrastructure]
+      summary: Liveness probe
+      operationId: healthz
+      security: []
+      responses:
+        "200":
+          description: Процесс жив.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Healthz"
+
+  /readyz:
+    get:
+      tags: [Infrastructure]
+      summary: Readiness probe
+      operationId: readyz
+      security: []
+      responses:
+        "200":
+          description: Готов к трафику (БД доступна; redis — мягкий статус).
+        "503":
+          description: Не готов (БД недоступна).
+
+  /metrics:
+    get:
+      tags: [Infrastructure]
+      summary: Prometheus metrics
+      operationId: metrics
+      security: []
+      responses:
+        "200":
+          description: Метрики в формате Prometheus exposition.
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  # --- Диалоговые сессии (E4/§10, наполняются с M1). Префикс /api/v1/concierge. ---
+  /api/v1/concierge/sessions:
+    post:
+      tags: [Sessions]
+      summary: Создать диалоговую сессию (анонимную/авторизованную)
+      operationId: createSession
+      responses:
+        "201":
+          description: Сессия создана.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+
+  /api/v1/concierge/sessions/{session_id}:
+    parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Sessions]
+      summary: История сессии (scope-фильтр, masking ПДн)
+      operationId: getSession
+      responses:
+        "200":
+          description: Сессия с историей реплик.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "404":
+          description: Не найдено / недоступно.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [Sessions]
+      summary: Right-to-forget — удалить/обезличить сессию (ФЗ-152)
+      operationId: deleteSession
+      responses:
+        "204":
+          description: Удалено.
+
+  /api/v1/concierge/sessions/{session_id}/messages:
+    parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Sessions]
+      summary: Реплика пользователя (ответ агента — SSE-стрим)
+      operationId: postMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MessageCreate"
+      responses:
+        "200":
+          description: Ответ агента (text/event-stream при стриме; здесь — итог хода).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentTurn"
+        "404":
+          description: Сессия не найдена / недоступна.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/concierge/sessions/{session_id}/handoff:
+    parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Sessions]
+      summary: Принудительная эскалация человеку (kb-support)
+      operationId: forceHandoff
+      responses:
+        "202":
+          description: Эскалация принята.
+
+  /api/v1/concierge/inbound/operator-reply:
+    post:
+      tags: [Inbound]
+      summary: Возврат ответа оператора в диалог (SERVICE-only)
+      operationId: operatorReply
+      responses:
+        "202":
+          description: Принято.
+        "403":
+          description: Требуется сервис-принципал.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Keycloak RS256 Bearer JWT (aud содержит `kb-concierge`).
+  schemas:
+    Healthz:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+      additionalProperties: false
+
+    Error:
+      description: RFC 7807 problem+json (без ПДн в detail).
+      type: object
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+
+    Session:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        channel:
+          type: [string, "null"]
+      additionalProperties: true
+
+    MessageCreate:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+          minLength: 1
+          maxLength: 8000
+      additionalProperties: false
+
+    AgentTurn:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+        content:
+          type: string
+        intent:
+          type: [string, "null"]
+      additionalProperties: true
