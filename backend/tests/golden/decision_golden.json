@@ -1,0 +1,21 @@
+{
+  "_doc": "Golden-набор сквозной маршрутизации (§7/§12): текст → распознавание (rules) → решение политики (матрица §7.1 + сигналы + guardrails). Проверяет ИТОГОВОЕ решение (outcome), а не только намерение. Тексты — маскированные, без ПДн. Владелец/расширение — Архитектор/kb-eval. Целевая точность — accuracy >= 0.9 (см. test_decision_golden.py).",
+  "cases": [
+    {"text": "Как продлить договор аренды?", "outcome": "ANSWER"},
+    {"text": "Какие документы нужны для заселения?", "outcome": "ANSWER"},
+    {"text": "Где посмотреть правила проживания?", "outcome": "ANSWER"},
+    {"text": "Нужна генеральная уборка квартиры 60 м2", "outcome": "TOOL_CALL", "requires_confirmation": true},
+    {"text": "Организуйте переезд из двушки", "outcome": "TOOL_CALL", "requires_confirmation": true},
+    {"text": "Сломался смеситель, вызовите сантехника", "outcome": "TOOL_CALL", "requires_confirmation": true},
+    {"text": "Партнёр не приехал в назначенное время", "outcome": "TOOL_CALL", "requires_confirmation": false},
+    {"text": "Оказано некачественно, недоволен", "outcome": "HANDOFF"},
+    {"text": "Хочу пожаловаться на качество", "outcome": "HANDOFF"},
+    {"text": "Требую компенсацию за испорченную мебель", "outcome": "HANDOFF"},
+    {"text": "Верните деньги за услугу", "outcome": "HANDOFF"},
+    {"text": "Отмените мой заказ полностью", "outcome": "HANDOFF"},
+    {"text": "Нужен юрист по моему договору, готовят иск", "outcome": "HANDOFF"},
+    {"text": "Здравствуйте!", "outcome": "ANSWER"},
+    {"text": "Спасибо большое", "outcome": "ANSWER"},
+    {"text": "Расскажи анекдот про кота", "outcome": "ANSWER"}
+  ]
+}
