@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from api.policy.engine import PolicyDecision, PolicyEngine
 from api.policy.enums import AgentActionKind, DecisionReason
+from api.policy.guardrails import enforce_decision, is_injection_attempt, wrap_untrusted
 from api.policy.matrix import POLICY_VERSION, AutonomyMatrix, IntentRule
 from api.policy.signals import TurnSignals, extract_signals
 
@@ -21,5 +22,8 @@ __all__ = [
     "PolicyDecision",
     "PolicyEngine",
     "TurnSignals",
+    "enforce_decision",
     "extract_signals",
+    "is_injection_attempt",
+    "wrap_untrusted",
 ]
