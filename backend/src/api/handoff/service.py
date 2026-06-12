@@ -25,9 +25,10 @@ from api.handoff.enums import (
 from api.handoff.models import HandoffRecord
 from api.handoff.repository import HandoffRepository
 from api.handoff.snapshot import build_context_snapshot, snapshot_ref
+from api.observability.pii_mask import mask_pii
 from api.sessions.access import can_access
-from api.sessions.enums import AuditAction, SessionStatus
-from api.sessions.models import AgentSession
+from api.sessions.enums import AuditAction, SessionStatus, TurnRole
+from api.sessions.models import AgentSession, AgentTurn
 from api.sessions.repository import SessionRepository
 from api.tools.base import ToolContext
 from api.tools.registry import ToolRegistry
@@ -79,6 +80,48 @@ class HandoffService:
         await self._handoffs.flush_refresh(record)
         await self._sessions.commit()
         return record
+
+    async def operator_reply(
+        self,
+        *,
+        principal: Principal,
+        session_id: uuid.UUID,
+        message: str,
+        ticket_ref: str | None,
+        correlation_id: str | None,
+    ) -> AgentTurn:
+        """Вернуть ВНЕШНИЙ ответ оператора в диалог (FR-7.2). Коммитит сам.
+
+        `message` — внешний ответ (попадает в диалог как реплика OPERATOR). Внутренние
+        заметки оператора сюда не передаются (инвариант «внутреннее ≠ внешнее», FR-7.3):
+        контур приёма SERVICE-only, схема запрещает посторонние поля. Без активной
+        эскалации → 404 (misrouted reply). ПДн в `content_masked` маскируются (G3).
+        """
+        session = await self._sessions.get_for_update(session_id)
+        if session is None:
+            raise ProblemException.not_found(detail="Session not found")
+        handoff = await self._handoffs.latest_open_for_session(session_id)
+        if handoff is None:
+            raise ProblemException.not_found(detail="No active handoff for session")
+
+        turn = AgentTurn(
+            session_id=session.id,
+            role=TurnRole.OPERATOR,
+            content=message,
+            content_masked=mask_pii(message),
+            correlation_id=correlation_id,
+        )
+        self._sessions.add_turn(turn)
+        self._sessions.add_audit(
+            session_id=session.id,
+            actor_id=principal.user_id,  # сервис-принципал kb-support (источник ответа)
+            action=AuditAction.OPERATOR_REPLIED.value,
+            from_value=ticket_ref or handoff.target_ref,
+            correlation_id=correlation_id,
+        )
+        await self._sessions.flush_refresh(turn)
+        await self._sessions.commit()
+        return turn
 
     async def escalate_in_turn(
         self, *, session: AgentSession, reason: str, correlation_id: str | None

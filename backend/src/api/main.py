@@ -18,6 +18,7 @@ from api import __version__
 from api.config import get_settings
 from api.db import get_session
 from api.errors import ProblemException, problem_exception_handler
+from api.handoff.router import router as inbound_router
 from api.observability.health import check_database, check_redis
 from api.observability.logging import configure_logging, get_logger
 from api.observability.metrics import MetricsMiddleware, metrics_response
@@ -46,6 +47,7 @@ app.add_middleware(RequestIdMiddleware)
 # Доменные роутеры (M1+) под общим префиксом /api/v1/concierge — добавляются по эпикам.
 app.include_router(sessions_router, prefix=_API_PREFIX)
 app.include_router(policy_router, prefix=_API_PREFIX)
+app.include_router(inbound_router, prefix=_API_PREFIX)
 
 
 class HealthzResponse(BaseModel):

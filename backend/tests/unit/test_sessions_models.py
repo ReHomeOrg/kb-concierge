@@ -23,7 +23,7 @@ def test_session_status_values_are_stable_contract() -> None:
 
 
 def test_turn_role_values_are_stable_contract() -> None:
-    assert {r.value for r in TurnRole} == {"USER", "AGENT", "TOOL", "SYSTEM"}
+    assert {r.value for r in TurnRole} == {"USER", "AGENT", "OPERATOR", "TOOL", "SYSTEM"}
 
 
 def test_audit_action_minimal_m1_set() -> None:

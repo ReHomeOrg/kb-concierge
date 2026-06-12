@@ -55,3 +55,23 @@ def test_error_schema_is_valid(spec: dict[str, Any]) -> None:
 def test_public_probes_have_empty_security(spec: dict[str, Any]) -> None:
     for path in ("/healthz", "/readyz", "/metrics"):
         assert spec["paths"][path]["get"]["security"] == []
+
+
+def test_handoff_and_operator_reply_declared(spec: dict[str, Any]) -> None:
+    base = "/api/v1/concierge"
+    handoff = spec["paths"][f"{base}/sessions/{{session_id}}/handoff"]["post"]
+    assert (
+        "HandoffAccepted"
+        in handoff["responses"]["202"]["content"]["application/json"]["schema"]["$ref"]
+    )
+    reply = spec["paths"][f"{base}/inbound/operator-reply"]["post"]
+    assert reply["requestBody"]["required"] is True
+    assert "403" in reply["responses"]  # SERVICE-only контур
+
+
+def test_operator_reply_schema_forbids_extra_fields(spec: dict[str, Any]) -> None:
+    # Инвариант «внутреннее ≠ внешнее» (FR-7.3): контракт запрещает посторонние поля
+    # (внутренние заметки оператора не могут попасть во входной контур диалога).
+    schema = spec["components"]["schemas"]["OperatorReplyIn"]
+    Draft202012Validator.check_schema(schema)
+    assert schema["additionalProperties"] is False

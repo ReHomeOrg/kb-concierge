@@ -27,10 +27,16 @@ class SessionStatus(str, enum.Enum):
 
 
 class TurnRole(str, enum.Enum):
-    """Роль автора реплики диалога (§4 `AgentTurn.role`)."""
+    """Роль автора реплики диалога (§4 `AgentTurn.role`).
+
+    OPERATOR — ВНЕШНИЙ ответ человека-оператора, возвращённый в диалог через
+    operator-reply (M6, §7.3); отделён от AGENT (ответ ИИ). Внутренние заметки
+    оператора репликами НЕ становятся (инвариант «внутреннее ≠ внешнее», FR-7.3).
+    """
 
     USER = "USER"
     AGENT = "AGENT"
+    OPERATOR = "OPERATOR"
     TOOL = "TOOL"
     SYSTEM = "SYSTEM"
 

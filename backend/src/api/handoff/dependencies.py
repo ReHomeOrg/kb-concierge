@@ -16,16 +16,28 @@ import httpx
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.auth.dependencies import get_current_principal
+from api.auth.principal import Principal, PrincipalKind
 from api.clients.auth import build_token_provider
 from api.clients.factory import build_resilient_client
 from api.clients.support.adapter import HttpKbSupportClient
 from api.config import get_settings
 from api.db import get_session
+from api.errors import ProblemException
 from api.handoff.repository import HandoffRepository
 from api.handoff.service import HandoffService
 from api.sessions.repository import SessionRepository
 from api.tools.handoff import HandoffToOperatorTool
 from api.tools.registry import ToolRegistry
+
+
+async def require_service(principal: Principal = Depends(get_current_principal)) -> Principal:
+    """Только сервис-принципал (m2m). Входящий operator-reply из kb-support (§10).
+
+    Пользователь/оператор-браузер сюда не допускаются → 403 (контур m2m, NFR-3)."""
+    if principal.kind is not PrincipalKind.SERVICE:
+        raise ProblemException.forbidden(detail="Service principal required")
+    return principal
 
 
 async def get_handoff_service(
