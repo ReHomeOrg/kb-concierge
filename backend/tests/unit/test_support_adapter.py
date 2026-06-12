@@ -115,8 +115,11 @@ async def test_create_ticket_routes_to_from_chat_as_service() -> None:
     assert path == ["/api/v1/support/tickets/from-chat"]  # S-2: реальный маршрут
     assert body["chat_session_id"] == "s-2"
     assert body["requester_id"] == "user-42"  # requester в теле, не в токене
-    assert body["subject"] == "USER_REQUESTED"
-    assert body["transcript"] == [{"role": "assistant", "content": "диалог ***"}]
+    assert "subject" not in body  # NIT #1: тему генерирует сосед из диалога
+    # reason сохранён в transcript (не потерян при опущенном subject):
+    assert body["transcript"] == [
+        {"role": "assistant", "content": "Причина эскалации: USER_REQUESTED\n\nдиалог ***"}
+    ]
     assert seen.get("authorization") == "Bearer m2m"  # SERVICE-токен (НЕ delegated:user-42)
     assert "x-on-behalf-of" not in seen
     assert seen.get("x-correlation-id") == "corr-9"  # NFR-13

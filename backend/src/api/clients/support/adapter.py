@@ -146,9 +146,12 @@ class HttpKbSupportClient:
         body: dict[str, Any] = {
             "chat_session_id": session_ref,
             "requester_id": on_behalf_of,
-            "subject": reason,
-            # Снимок диалога (уже маскирован, G3) — оператору в transcript.
-            "transcript": [{"role": "assistant", "content": context_masked}],
+            # subject опущен — kb-support генерирует тему из диалога (NIT #1, openapi:
+            # «Если не задано — генерируется из диалога»). Причина эскалации + снимок диалога
+            # (уже маскирован, G3) — оператору в transcript, чтобы сигнал reason не потерялся.
+            "transcript": [
+                {"role": "assistant", "content": f"Причина эскалации: {reason}\n\n{context_masked}"}
+            ],
         }
         try:
             # from-chat — SERVICE-only (S-4): m2m-токен агента (on_behalf_of=None), requester
