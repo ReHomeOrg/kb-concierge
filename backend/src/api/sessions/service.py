@@ -14,10 +14,16 @@ from api.auth.principal import Principal, PrincipalKind
 from api.auth.system_actors import AGENT_ACTOR_ID
 from api.config import Settings
 from api.errors import ProblemException
+from api.observability.pii_mask import mask_pii
 from api.sessions.access import can_access, resolve_owner
-from api.sessions.enums import AuditAction, SessionStatus
+from api.sessions.enums import AuditAction, SessionStatus, TurnRole
 from api.sessions.models import AgentSession, AgentTurn
 from api.sessions.repository import SessionRepository
+
+# Детерминированный ответ-заглушка хода (M1.3). Реальное распознавание намерения и
+# ответ — Intent Router (M2) и Reasoning Loop (M5); LLM в M1 НЕ вызывается (порядок
+# эпиков §14). Текст без ПДн → content_masked == content.
+_PLACEHOLDER_REPLY = "Принял ваше сообщение, обрабатываю запрос."
 
 
 def _audit_actor(principal: Principal) -> uuid.UUID:
@@ -77,6 +83,63 @@ class SessionService:
             raise ProblemException.not_found(detail="Session not found")
         turns = await self._repo.list_turns(session_id)
         return session, turns
+
+    async def post_message(
+        self,
+        principal: Principal,
+        session_id: uuid.UUID,
+        content: str,
+        correlation_id: str | None,
+    ) -> AgentTurn:
+        """Записать реплику пользователя и вернуть ответ агента (M1.3 — плейсхолдер).
+
+        ПДн маскируются при записи (`content_masked`, G3). Реальное распознавание
+        намерения и содержательный ответ появятся в M2 (Intent Router) / M5 (loop);
+        здесь LLM не вызывается. Реплики упорядочены явным `ts` (now() в одной
+        транзакции константна — пользователь и ответ получили бы равный штамп).
+        """
+        session = await self._repo.get_for_update(session_id)
+        if session is None or not can_access(principal, session):
+            raise ProblemException.not_found(detail="Session not found")
+        if session.status is not SessionStatus.ACTIVE:
+            raise ProblemException.conflict(detail="Session is not active")
+
+        base_ts = self._repo.now()
+        user_turn = AgentTurn(
+            session_id=session.id,
+            role=TurnRole.USER,
+            content=content,
+            content_masked=mask_pii(content),
+            correlation_id=correlation_id,
+            ts=base_ts,
+        )
+        self._repo.add_turn(user_turn)
+        self._repo.add_audit(
+            session_id=session.id,
+            actor_id=_audit_actor(principal),
+            action=AuditAction.MESSAGE_RECEIVED.value,
+            correlation_id=correlation_id,
+        )
+
+        agent_turn = AgentTurn(
+            session_id=session.id,
+            role=TurnRole.AGENT,
+            content=_PLACEHOLDER_REPLY,
+            content_masked=_PLACEHOLDER_REPLY,
+            correlation_id=correlation_id,
+            ts=base_ts + datetime.timedelta(milliseconds=1),
+        )
+        self._repo.add_turn(agent_turn)
+        self._repo.add_audit(
+            session_id=session.id,
+            actor_id=AGENT_ACTOR_ID,  # инфраструктурный ответ агента (не on-behalf-of)
+            action=AuditAction.AGENT_RESPONDED.value,
+            correlation_id=correlation_id,
+        )
+
+        await self._repo.flush_refresh(agent_turn)
+        await self._repo.commit()
+        return agent_turn
 
     async def forget_session(
         self, principal: Principal, session_id: uuid.UUID, correlation_id: str | None

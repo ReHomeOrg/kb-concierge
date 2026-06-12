@@ -150,6 +150,18 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "409":
+          description: Сессия не активна (завершена/обезличена).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Превышен лимит публичного входа (NFR-12).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/v1/concierge/sessions/{session_id}/handoff:
     parameters:

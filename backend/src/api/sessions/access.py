@@ -11,18 +11,9 @@
 
 from __future__ import annotations
 
-from sqlalchemy import ColumnElement
-
 from api.auth.principal import Principal, PrincipalKind
 from api.sessions.enums import AccessLevel
 from api.sessions.models import AgentSession
-
-
-def ownership_filter(principal: Principal) -> ColumnElement[bool] | None:
-    """SQL-условие владения для фильтра на хранилище. `None` — оператор видит все."""
-    if principal.is_operator or principal.is_staff_admin:
-        return None
-    return AgentSession.user_id == str(principal.effective_user_id)
 
 
 def can_access(principal: Principal, session: AgentSession) -> bool:

@@ -37,6 +37,15 @@ class SessionRepository:
         stmt = select(AgentSession).where(AgentSession.id == session_id).with_for_update()
         return (await self._db.execute(stmt)).scalar_one_or_none()
 
+    def add_turn(self, turn: AgentTurn) -> None:
+        """Добавить реплику в текущую транзакцию (flush/commit — у сервиса)."""
+        self._db.add(turn)
+
+    async def flush_refresh(self, turn: AgentTurn) -> None:
+        """Сбросить в БД и подгрузить server-side поля реплики (ts)."""
+        await self._db.flush()
+        await self._db.refresh(turn)
+
     async def list_turns(self, session_id: uuid.UUID) -> list[AgentTurn]:
         """Реплики сессии в хронологическом порядке (`ts`, затем `id` — стабильно)."""
         stmt = (

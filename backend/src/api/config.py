@@ -49,6 +49,18 @@ class Settings(BaseSettings):
         default=90, ge=1, description="TTL авторизованной сессии (дни)."
     )
 
+    # --- Rate-limit публичного входа (NFR-12, анти-абьюз). Свой токен-бакет
+    # in-memory (без новых зависимостей); ключ — пользователь/анон-сессия. ---
+    rate_limit_enabled: bool = Field(
+        default=True, description="Включить лимит на POST /sessions/{id}/messages."
+    )
+    rate_limit_capacity: int = Field(
+        default=30, ge=1, description="Ёмкость бакета (burst-лимит реплик)."
+    )
+    rate_limit_refill_per_minute: int = Field(
+        default=30, ge=1, description="Скорость пополнения (устойчивый лимит реплик/мин)."
+    )
+
     # --- Keycloak Bearer JWT. Пустой auth_jwks_url → auth не сконфигурирован
     # (fail-closed 401). aud токена фронта/агента ДОЛЖЕН содержать `kb-concierge`. ---
     auth_jwks_url: str = Field(default="", description="URL JWKS Keycloak.")

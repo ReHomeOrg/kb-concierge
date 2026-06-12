@@ -25,6 +25,14 @@ class SessionCreate(BaseModel):
     channel: str | None = Field(default=None, max_length=64)
 
 
+class MessageCreate(BaseModel):
+    """Тело POST /sessions/{id}/messages — реплика пользователя."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=1, max_length=8000)
+
+
 class TurnRead(BaseModel):
     """Реплика диалога в ответе API (видна владельцу/оператору)."""
 

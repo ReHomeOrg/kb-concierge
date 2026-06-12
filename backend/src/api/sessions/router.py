@@ -13,9 +13,11 @@ from starlette.responses import Response
 
 from api.auth.dependencies import get_current_principal
 from api.auth.principal import Principal
+from api.errors import ProblemException
 from api.observability.context import get_request_id
-from api.sessions.dependencies import get_session_service
-from api.sessions.schemas import SessionCreate, SessionRead
+from api.sessions.dependencies import get_rate_limiter, get_session_service
+from api.sessions.ratelimit import RateLimiter
+from api.sessions.schemas import MessageCreate, SessionCreate, SessionRead, TurnRead
 from api.sessions.service import SessionService
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
@@ -50,6 +52,27 @@ async def get_session_endpoint(
     """Сессия с историей реплик; недоступная → 404 (анти-enumeration, NFR-3)."""
     session, turns = await service.get_session(principal, session_id)
     return SessionRead.from_orm_session(session, turns)
+
+
+@router.post(
+    "/{session_id}/messages",
+    response_model=TurnRead,
+    summary="Реплика пользователя; ответ агента (M1.3 — детерминированный плейсхолдер)",
+)
+async def post_message_endpoint(
+    session_id: uuid.UUID,
+    payload: MessageCreate,
+    principal: Principal = Depends(get_current_principal),
+    service: SessionService = Depends(get_session_service),
+    limiter: RateLimiter = Depends(get_rate_limiter),
+) -> TurnRead:
+    """Принять реплику и вернуть ответ агента. Лимит публичного входа (NFR-12) → 429."""
+    if not limiter.allow(str(principal.effective_user_id)):
+        raise ProblemException.too_many_requests(detail="Rate limit exceeded")
+    agent_turn = await service.post_message(
+        principal, session_id, payload.content, get_request_id()
+    )
+    return TurnRead.from_orm_turn(agent_turn)
 
 
 @router.delete(
