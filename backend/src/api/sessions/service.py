@@ -17,10 +17,12 @@ from api.errors import ProblemException
 from api.intent.service import IntentService
 from api.observability.pii_mask import mask_pii
 from api.policy.service import PolicyService
+from api.reasoning.loop import ReasoningLoop
 from api.sessions.access import can_access, resolve_owner
 from api.sessions.enums import AuditAction, SessionStatus, TurnRole
 from api.sessions.models import AgentSession, AgentTurn
 from api.sessions.repository import SessionRepository
+from api.tools.base import ToolContext
 
 # Ответ хода при деградации распознавания (намерение не определено, FR-6.6).
 _DEGRADED_REPLY = "Принял ваше сообщение, обрабатываю запрос."
@@ -98,14 +100,15 @@ class SessionService:
         session_id: uuid.UUID,
         content: str,
         correlation_id: str | None,
+        reasoning_loop: ReasoningLoop,
     ) -> AgentTurn:
-        """Записать реплику пользователя, распознать намерение и вернуть ответ агента.
+        """Записать реплику, распознать намерение, решить политикой и ИСПОЛНИТЬ ход.
 
-        ПДн маскируются при записи (`content_masked`, G3) и в классификатор идёт
-        ТОЛЬКО маска. Распознавание — Intent Router (M2): intent/confidence/трасса
-        пишутся на user-реплику (FR-5.4); ответ агента — детерминированный маршрут-
-        отклик (содержательный ответ из KB и tool-вызовы — M3+; clarify-цикл — M5).
-        Реплики упорядочены явным `ts` (now() в одной транзакции константна).
+        ПДн маскируются (`content_masked`, G3); в классификатор/инструменты — только
+        маска. Распознавание (M2) → решение политики §7 (M4) → bounded reasoning loop
+        (M5): исполняет разрешённые read-only инструменты и формирует ответ. Трасса
+        intent/policy/loop пишется на user-реплику (FR-5.4); tool-вызовы — в аудит
+        (FR-6.3). Реплики упорядочены явным `ts` (now() в транзакции константна).
         """
         session = await self._repo.get_for_update(session_id)
         if session is None or not can_access(principal, session):
@@ -124,14 +127,24 @@ class SessionService:
             ts=base_ts,
         )
 
-        # Распознавание намерения по МАСКИРОВАННОМУ тексту (G3); деградация → None.
-        # Затем решение политики автономности (§7): что делать с ходом.
+        # Распознавание (G3) → решение политики (§7) → исполнение цикла (§6).
         outcome = await self._intent.classify(masked)
         decision = None
+        reply = _DEGRADED_REPLY
+        loop_result = None
         if outcome is not None:
             decision = self._policy.decide(outcome.intent, outcome.confidence, masked)
+            tool_context = ToolContext(on_behalf_of=session.user_id, correlation_id=correlation_id)
+            loop_result = await reasoning_loop.run(
+                decision=decision,
+                intent=outcome.intent,
+                query_masked=masked,
+                context=tool_context,
+            )
+            reply = loop_result.reply
             trace = outcome.to_trace(base_ts)
             trace["policy"] = decision.to_trace()
+            trace["loop"] = loop_result.to_trace()
             user_turn.intent = outcome.intent.value
             user_turn.confidence = outcome.confidence
             user_turn.intent_trace = trace
@@ -143,7 +156,7 @@ class SessionService:
             action=AuditAction.MESSAGE_RECEIVED.value,
             correlation_id=correlation_id,
         )
-        if outcome is not None and decision is not None:
+        if outcome is not None and decision is not None and loop_result is not None:
             self._repo.add_audit(
                 session_id=session.id,
                 actor_id=AGENT_ACTOR_ID,  # распознавание/решение — инфраструктурные действия агента
@@ -160,12 +173,16 @@ class SessionService:
                 to_value=decision.reason.value,
                 correlation_id=correlation_id,
             )
+            for obs in loop_result.observations:
+                self._repo.add_audit(
+                    session_id=session.id,
+                    actor_id=AGENT_ACTOR_ID,
+                    action=AuditAction.TOOL_CALLED.value,
+                    from_value="unavailable" if obs.unavailable else "ok",
+                    to_value=obs.tool,
+                    correlation_id=correlation_id,
+                )
 
-        reply = (
-            self._policy.reply_for(decision, outcome.intent)
-            if outcome is not None and decision is not None
-            else _DEGRADED_REPLY
-        )
         agent_turn = AgentTurn(
             session_id=session.id,
             role=TurnRole.AGENT,
