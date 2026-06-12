@@ -18,13 +18,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from api.observability.logging import get_logger
-
 if TYPE_CHECKING:
     from api.clients.oauth import ClientCredentialsTokenProvider, TokenExchangeProvider
     from api.config import Settings
-
-_logger = get_logger("clients.auth")
 
 
 @runtime_checkable

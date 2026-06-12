@@ -7,6 +7,7 @@ import httpx
 from api.clients.auth import StaticTokenProvider, TokenProvider
 from api.clients.base import ResilientHttpClient
 from api.clients.circuit_breaker import CircuitBreaker
+from api.clients.errors import ExternalServiceError
 from api.clients.retry import RetryPolicy
 from api.clients.search.adapter import HttpKbSearchClient
 
@@ -21,6 +22,24 @@ class _DelegatingToken:
 
     async def get_token(self, on_behalf_of: str | None = None) -> str:
         return f"delegated:{on_behalf_of}" if on_behalf_of is not None else "m2m"
+
+
+class _FailingToken:
+    """Фейк: получение токена падает (Keycloak/обмен недоступны) — проверка деградации G6."""
+
+    async def get_token(self, on_behalf_of: str | None = None) -> str:
+        raise ExternalServiceError("keycloak", "token", "down")
+
+
+async def test_search_degrades_when_token_fails() -> None:
+    # CC-1/G6: сбой получения делегир. токена → unavailable, ход не падает.
+    client, http = _client(
+        httpx.MockTransport(lambda r: httpx.Response(200, json={"results": []})),
+        token_provider=_FailingToken(),
+    )
+    async with http:
+        ref = await client.search(query_masked="вопрос", on_behalf_of="u-1")
+    assert ref.unavailable is True
 
 
 def _client(
