@@ -64,7 +64,10 @@ async def test_create_ticket_maps_id() -> None:
     client, http = _client(httpx.MockTransport(lambda r: httpx.Response(201, json={"id": "T-77"})))
     async with http:
         ref = await client.create_ticket(
-            reason="MONEY_NEVER_AUTONOMOUS", context_masked="диалог ***", session_ref="s-1"
+            reason="MONEY_NEVER_AUTONOMOUS",
+            context_masked="диалог ***",
+            session_ref="s-1",
+            on_behalf_of="u-1",
         )
     assert ref.unavailable is False
     assert ref.ticket_id == "T-77"
@@ -83,41 +86,64 @@ async def test_unwraps_response_envelope() -> None:
     assert (ref.ticket_id, ref.number, ref.status) == ("T-9", "S-9", "NEW")
 
 
-async def test_create_ticket_sends_delegation_idempotency_and_correlation() -> None:
+async def test_create_ticket_routes_to_from_chat_as_service() -> None:
+    # S-2 (Э0): эскалация идёт на реальный from-chat; requester_id — В ТЕЛЕ; токен — m2m
+    # (from-chat SERVICE-only, S-4), НЕ делегированный; +idempotency/correlation.
     seen: dict[str, str] = {}
+    path: list[str] = []
     body: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.update(request.headers)
+        path.append(request.url.path)
         import json
 
         body.update(json.loads(request.content))
-        return httpx.Response(201, json={"ticket_id": "T-1"})
+        return httpx.Response(201, json={"data": {"id": "T-1", "status": "NEW"}, "request_id": "r"})
 
     client, http = _client(httpx.MockTransport(handler), token_provider=_DelegatingToken())
     async with http:
         ref = await client.create_ticket(
             reason="USER_REQUESTED",
-            context_masked="x",
+            context_masked="диалог ***",
             session_ref="s-2",
             on_behalf_of="user-42",
             correlation_id="corr-9",
             idempotency_key="idem-5",
         )
-    assert ref.ticket_id == "T-1"
-    # CC-1: делегирование — в токене (token-exchange), не заголовком X-On-Behalf-Of.
-    assert seen.get("authorization") == "Bearer delegated:user-42"  # делегированный токен (G7)
-    assert "x-on-behalf-of" not in seen  # мёртвый заголовок убран
+    assert (ref.ticket_id, ref.status) == ("T-1", "NEW")  # +S-1 конверт
+    assert path == ["/api/v1/support/tickets/from-chat"]  # S-2: реальный маршрут
+    assert body["chat_session_id"] == "s-2"
+    assert body["requester_id"] == "user-42"  # requester в теле, не в токене
+    assert body["subject"] == "USER_REQUESTED"
+    assert body["transcript"] == [{"role": "assistant", "content": "диалог ***"}]
+    assert seen.get("authorization") == "Bearer m2m"  # SERVICE-токен (НЕ delegated:user-42)
+    assert "x-on-behalf-of" not in seen
     assert seen.get("x-correlation-id") == "corr-9"  # NFR-13
     assert seen.get("idempotency-key") == "idem-5"  # §10 анти-дубль
-    assert body["context"] == "x"
-    assert body["source"] == "concierge"
+
+
+async def test_create_ticket_anonymous_degrades_to_pending() -> None:
+    # S-2 вариант A: аноним (on_behalf_of=None) → unavailable (PENDING), БЕЗ вызова соседа.
+    called = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        called["n"] += 1
+        return httpx.Response(201, json={"data": {"id": "T-1"}})
+
+    client, http = _client(httpx.MockTransport(handler))
+    async with http:
+        ref = await client.create_ticket(reason="r", context_masked="x", session_ref="s")
+    assert ref.unavailable is True  # деградация в PENDING
+    assert called["n"] == 0  # соседа не дёргали (нет requester_id)
 
 
 async def test_create_ticket_degrades_on_unavailable() -> None:
     client, http = _client(httpx.MockTransport(lambda r: httpx.Response(503)))
     async with http:
-        ref = await client.create_ticket(reason="r", context_masked="x", session_ref="s")
+        ref = await client.create_ticket(
+            reason="r", context_masked="x", session_ref="s", on_behalf_of="u-1"
+        )
     assert ref.unavailable is True  # сосед недоступен → деградация (FR-6.6)
     assert ref.ticket_id is None
 
@@ -125,14 +151,18 @@ async def test_create_ticket_degrades_on_unavailable() -> None:
 async def test_create_ticket_degrades_on_4xx() -> None:
     client, http = _client(httpx.MockTransport(lambda r: httpx.Response(422, json={})))
     async with http:
-        ref = await client.create_ticket(reason="r", context_masked="x", session_ref="s")
+        ref = await client.create_ticket(
+            reason="r", context_masked="x", session_ref="s", on_behalf_of="u-1"
+        )
     assert ref.unavailable is True  # сосед ответил ошибкой → тикет не создан
 
 
 async def test_create_ticket_degrades_on_missing_id() -> None:
     client, http = _client(httpx.MockTransport(lambda r: httpx.Response(201, json={"foo": "bar"})))
     async with http:
-        ref = await client.create_ticket(reason="r", context_masked="x", session_ref="s")
+        ref = await client.create_ticket(
+            reason="r", context_masked="x", session_ref="s", on_behalf_of="u-1"
+        )
     assert ref.unavailable is True
 
 
