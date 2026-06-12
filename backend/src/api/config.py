@@ -114,6 +114,10 @@ class Settings(BaseSettings):
         default="", description="Base URL kb-support (эскалация/тикеты)."
     )
     kb_support_api_token: str = Field(default="", description="Fallback-токен kb-support (dev).")
+    kb_partners_api_base_url: str = Field(
+        default="", description="Base URL kb-partners (партнёрские заявки)."
+    )
+    kb_partners_api_token: str = Field(default="", description="Fallback-токен kb-partners (dev).")
 
     # --- Dramatiq-воркер (durable исходящие события, фоновые задачи). ПУСТОЙ
     # broker_url → StubBroker, акторы инертны (broker/worker поднимает ops). ---
