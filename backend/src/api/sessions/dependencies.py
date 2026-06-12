@@ -14,18 +14,34 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.config import get_settings
 from api.db import get_session
 from api.intent.service import IntentService, build_intent_classifier
+from api.policy.matrix import AutonomyMatrix
+from api.policy.repository import PolicyRepository
+from api.policy.service import PolicyService
 from api.sessions.ratelimit import RateLimiter, build_rate_limiter
 from api.sessions.repository import SessionRepository
 from api.sessions.service import SessionService
 
 
-def get_session_service(db: AsyncSession = Depends(get_session)) -> SessionService:
-    """Сервис диалоговых сессий на сессию запроса (+ Intent Router, E5)."""
+async def get_session_service(db: AsyncSession = Depends(get_session)) -> SessionService:
+    """Сервис диалоговых сессий на сессию запроса (+ Intent Router E5 + Policy Engine §7).
+
+    Матрица автономности — из активной `AutonomyPolicy` (если есть), иначе встроенный
+    DEFAULT_MATRIX с порогом из конфига.
+    """
     settings = get_settings()
-    intent_service = IntentService(
-        build_intent_classifier(settings), settings.intent_confidence_threshold
-    )
-    return SessionService(SessionRepository(db), settings, intent_service)
+    intent_service = IntentService(build_intent_classifier(settings))
+
+    active = await PolicyRepository(db).get_active()
+    if active is None:
+        matrix = AutonomyMatrix(confidence_threshold=settings.intent_confidence_threshold)
+    else:
+        matrix = AutonomyMatrix.from_policy(
+            confidence_threshold=active.confidence_threshold,
+            version=active.version,
+            rules_json=active.rules,
+        )
+    policy_service = PolicyService(matrix)
+    return SessionService(SessionRepository(db), settings, intent_service, policy_service)
 
 
 @lru_cache(maxsize=1)
