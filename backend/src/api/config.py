@@ -99,6 +99,13 @@ class Settings(BaseSettings):
     client_breaker_reset_timeout: float = Field(default=30.0, gt=0)
     client_cache_ttl_seconds: int = Field(default=60, ge=1)
 
+    # --- Соседи-инструменты (§8). Base URL + fallback-токен (dev/test; боевой токен —
+    # через OAuth2 по ADR). ПУСТОЙ base_url → инструмент инертен/деградирует. ---
+    kb_search_api_base_url: str = Field(default="", description="Base URL kb-search (RAG).")
+    kb_search_api_token: str = Field(default="", description="Fallback-токен kb-search (dev).")
+    platform_api_base_url: str = Field(default="", description="Base URL rehome.one (контекст).")
+    platform_api_token: str = Field(default="", description="Fallback-токен rehome.one (dev).")
+
     # --- Dramatiq-воркер (durable исходящие события, фоновые задачи). ПУСТОЙ
     # broker_url → StubBroker, акторы инертны (broker/worker поднимает ops). ---
     worker_broker_url: str = Field(default="", description="Redis-broker Dramatiq. ПУСТО → Stub.")
