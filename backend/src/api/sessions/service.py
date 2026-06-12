@@ -18,6 +18,12 @@ from api.errors import ProblemException
 from api.handoff.service import HandoffService
 from api.intent.enums import Intent
 from api.intent.service import IntentService
+from api.observability.agent_metrics import (
+    record_action,
+    record_confirmation,
+    record_intent,
+    record_policy,
+)
 from api.observability.pii_mask import mask_pii
 from api.policy.engine import PolicyDecision
 from api.policy.enums import AgentActionKind, DecisionReason
@@ -35,6 +41,21 @@ _DEGRADED_REPLY = "Принял ваше сообщение, обрабатыв�
 # Ответы разрешения подтверждения (FR-7.4).
 _DECLINE_REPLY = "Хорошо, отменил. Если понадобится — обращайтесь."
 _REASK_REPLY = "Нужно ваше подтверждение: оформляем заявку? Ответьте «да» или «нет»."
+
+
+def _action_kind(loop_result: LoopResult, outcome: AgentActionKind) -> str:
+    """Свести итог хода к стабильному лейблу метрики действия (§6.1, M8)."""
+    if loop_result.awaiting_confirmation:
+        return "awaiting_confirmation"
+    if loop_result.handoff:
+        return "handoff"
+    if loop_result.action_taken:
+        return "action_taken"
+    if loop_result.degraded:
+        return "degraded"
+    if outcome is AgentActionKind.CLARIFY:
+        return "clarify"
+    return "answered"
 
 
 def _decision_from_pending(pending: dict[str, Any]) -> PolicyDecision:
@@ -270,6 +291,11 @@ class SessionService:
         extra_audits.append(
             (AuditAction.POLICY_DECISION.value, decision.outcome.value, decision.reason.value)
         )
+        # Наблюдаемость решений агента (§11, M8): низкокардинальные enum-лейблы.
+        record_intent(outcome.intent.value, outcome.method)
+        record_policy(decision.outcome.value, decision.reason.value)
+        record_action(_action_kind(loop_result, decision.outcome))
+
         if loop_result.awaiting_confirmation:
             session.pending_action = {
                 "tools": list(decision.allowed_tools),
@@ -278,6 +304,7 @@ class SessionService:
                 "policy_version": decision.policy_version,
                 "reason": decision.reason.value,
             }
+            record_confirmation("requested")
             extra_audits.append(
                 (
                     AuditAction.CONFIRMATION_REQUESTED.value,
@@ -300,6 +327,7 @@ class SessionService:
         отменить, неясно → переспросить (детерминированно, не LLM; G6)."""
         pending: dict[str, Any] = session.pending_action or {}
         verdict = detect_confirmation(masked)
+        record_confirmation(verdict.value.lower())  # yes/no/unclear (§7.4, M8)
         trace: dict[str, Any] = {
             "confirmation": verdict.value,
             "pending_intent": pending.get("intent"),
@@ -321,6 +349,7 @@ class SessionService:
             trace["loop"] = loop_result.to_trace()
             user_turn.intent_trace = trace
             session.pending_action = None
+            record_action("action_taken" if loop_result.action_taken else "degraded")
             return loop_result.reply, loop_result
 
         user_turn.intent_trace = trace
