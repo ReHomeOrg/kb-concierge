@@ -69,6 +69,23 @@ class Settings(BaseSettings):
     intent_llm_provider: str = Field(
         default="null", description="Провайдер распознавания намерения: null|yandexgpt."
     )
+    # YandexGPT — боевой LLM intent-роутера (ADR-0003). РФ, ФЗ-152. Свой HTTP-адаптер
+    # (Api-Key), без вендорского SDK. ПУСТОЙ api_key/folder → провайдер инертен (rules-
+    # only). На вход модели идёт ТОЛЬКО маскированный текст (ПДн вырезаны до LLM, G3/G4).
+    yandexgpt_api_base_url: str = Field(
+        default="https://llm.api.cloud.yandex.net",
+        description="Базовый URL YandexGPT Foundation Models API.",
+    )
+    yandexgpt_api_key: str = Field(
+        default="", description="Api-Key YandexGPT (ссылка на kb-vault). ПУСТО → провайдер инертен."
+    )
+    yandexgpt_folder_id: str = Field(
+        default="", description="Идентификатор каталога Yandex Cloud (x-folder-id)."
+    )
+    yandexgpt_model: str = Field(
+        default="yandexgpt-lite",
+        description="Имя модели YandexGPT (modelUri=gpt://<folder>/<model>/latest).",
+    )
 
     # --- Reasoning Loop (E6, bounded FR-6.2): лимиты на ход. ---
     loop_max_tool_calls: int = Field(default=3, ge=0, le=20, description="Макс. tool-вызовов/ход.")
