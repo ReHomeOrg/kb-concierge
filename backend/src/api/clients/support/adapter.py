@@ -19,10 +19,9 @@ from api.clients.base import ResilientHttpClient
 from api.clients.errors import ExternalServiceError
 from api.clients.support.models import TicketRef
 
-# Agent-ready база kb-support. `_TICKETS_PATH` — провизорный путь эскалации M6
-# (изолирован, сверяется с боевым контрактом при провижининге); write-инструменты
-# M7 используют реальные маршруты `_SUPPORT_BASE`.
-_TICKETS_PATH = "/api/v1/tickets"
+# Agent-ready база kb-support. Создание тикетов (эскалация M6 и write-инструменты M7) —
+# через реальный from-chat (`_SUPPORT_BASE`). Маршрута `/api/v1/tickets` у соседа нет
+# (Э0 S-2): handoff заводит тикет тем же from-chat-контрактом.
 _SUPPORT_BASE = "/api/v1/support/tickets"
 
 
@@ -139,20 +138,33 @@ class HttpKbSupportClient:
         correlation_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> TicketRef:
-        body = {
-            "source": "concierge",
-            "reason": reason,
-            "context": context_masked,  # уже маскирован (G3)
-            "session_ref": session_ref,
+        # S-2 (Э0): эскалация заводит тикет через реальный from-chat (маршрута /api/v1/tickets
+        # нет). from-chat требует requester_id (uuid); анонимная сессия (on_behalf_of=None)
+        # → деградация в PENDING (Архитектор 2026-06-12, вариант A: аноним не доходит до тикета).
+        if on_behalf_of is None:
+            return TicketRef(unavailable=True)
+        body: dict[str, Any] = {
+            "chat_session_id": session_ref,
+            "requester_id": on_behalf_of,
+            # subject опущен — kb-support генерирует тему из диалога (NIT #1, openapi:
+            # «Если не задано — генерируется из диалога»). Причина эскалации + снимок диалога
+            # (уже маскирован, G3) — оператору в transcript, чтобы сигнал reason не потерялся.
+            "transcript": [
+                {"role": "assistant", "content": f"Причина эскалации: {reason}\n\n{context_masked}"}
+            ],
         }
         try:
-            # Заголовки (вкл. получение токена) — ВНУТРИ try: сбой token-exchange
-            # деградирует в unavailable (G6). Делегирование — в токене, не заголовком (CC-1).
-            headers = await self._headers(on_behalf_of=on_behalf_of, correlation_id=correlation_id)
+            # from-chat — SERVICE-only (S-4): m2m-токен агента (on_behalf_of=None), requester
+            # передаётся в ТЕЛЕ. Делегированный токен здесь не нужен. Токен — внутри try (G6).
+            headers = await self._headers(on_behalf_of=None, correlation_id=correlation_id)
             if idempotency_key is not None:
                 headers["Idempotency-Key"] = idempotency_key  # анти-дубль тикета (§10)
             response = await self._http.request(
-                "POST", _TICKETS_PATH, operation="create_ticket", json=body, headers=headers
+                "POST",
+                f"{_SUPPORT_BASE}/from-chat",
+                operation="create_ticket",
+                json=body,
+                headers=headers,
             )
         except ExternalServiceError:
             return TicketRef(unavailable=True)
@@ -163,9 +175,14 @@ class HttpKbSupportClient:
 
 
 def _to_ref(payload: Any) -> TicketRef:
-    """Маппинг провизорного контракта kb-support → доменный DTO (без ПДн)."""
+    """Маппинг контракта kb-support → доменный DTO (без ПДн)."""
     if not isinstance(payload, dict):
         return TicketRef(unavailable=True)
+    # S-1 (Э0): kb-support заворачивает ответы в ResponseEnvelope {data, request_id} —
+    # полезная нагрузка лежит в `data`. Дефенсивно: без конверта читаем верхний уровень.
+    data = payload.get("data")
+    if isinstance(data, dict):
+        payload = data
     ticket_id = payload.get("id") or payload.get("ticket_id")
     if ticket_id is None:
         return TicketRef(unavailable=True)
