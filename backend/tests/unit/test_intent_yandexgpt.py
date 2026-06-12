@@ -45,6 +45,14 @@ async def test_strips_code_fences() -> None:
     assert result.intent is Intent.PARTNER_SERVICE
 
 
+async def test_strips_single_line_code_fences() -> None:
+    # NIT #1: fenced-JSON без переноса строки тоже должен разбираться (не теряться).
+    transport = _completion('```json{"intent": "SMALL_TALK", "confidence": 0.6}```')
+    result = await YandexGptProvider(_CONFIGURED, transport=transport).classify("спасибо")
+    assert result is not None
+    assert result.intent is Intent.SMALL_TALK
+
+
 async def test_carries_slots() -> None:
     transport = _completion('{"intent": "INFO_QA", "confidence": 0.7, "slots": {"topic": "lease"}}')
     result = await YandexGptProvider(_CONFIGURED, transport=transport).classify("как продлить")

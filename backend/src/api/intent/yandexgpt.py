@@ -29,6 +29,10 @@ _logger = get_logger("intent.yandexgpt")
 
 _COMPLETION_PATH = "/foundationModels/v1/completion"
 
+# Версия КОНТРАКТА ПАРСЕРА адаптера (трасса FR-5.4), не версия модели — модель в
+# `LLMIntent.model` (`yandexgpt_model`). Меняется при изменении формата разбора ответа.
+_PARSER_VERSION = "v1"
+
 # Инструкция модели: классификация намерения (Intent, §5) + строгий JSON. Содержит
 # только имена классов — без ПДн и без бизнес-данных.
 _SYSTEM_PROMPT = (
@@ -113,19 +117,23 @@ class YandexGptProvider:
             confidence=max(0.0, min(1.0, confidence)),
             slots=slots,
             model=self._s.yandexgpt_model,
-            version="v1",
+            version=_PARSER_VERSION,
         )
 
 
 def _strip_fences(text: str) -> str:
-    """Убрать ```json ... ``` обёртку, если модель её добавила."""
+    """Убрать ```json ... ``` обёртку, если модель её добавила.
+
+    Робастно к однострочному варианту (` ```json{...}``` ` без переноса): снимаем
+    открывающие/закрывающие бэктики и опц. язык-метку независимо от `\\n`.
+    """
     cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.split("\n", 1)[-1] if "\n" in cleaned else cleaned
-        cleaned = cleaned.removeprefix("json").strip()
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3].strip()
-    return cleaned
+    if not cleaned.startswith("```"):
+        return cleaned
+    cleaned = cleaned[3:]  # открывающие бэктики
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]  # закрывающие бэктики
+    return cleaned.strip().removeprefix("json").strip()
 
 
 def build_llm_provider(settings: Settings) -> LLMProvider:
