@@ -32,6 +32,7 @@ _NO_ANSWER_REPLY = (
 )
 
 _KB_SEARCH = "kb.search"
+_KB_ANSWER = "kb.answer"
 _PARTNERS_CREATE = "partners.create_request"
 _PARTNERS_CLASSIFY = "partners.classify"
 _SUPPORT_CREATE = "support.create_ticket"
@@ -95,9 +96,12 @@ class LoopResult:
 class ReasoningLoop:
     """Bounded-исполнитель решения политики поверх реестра инструментов."""
 
-    def __init__(self, registry: ToolRegistry, limits: Limits) -> None:
+    def __init__(self, registry: ToolRegistry, limits: Limits, *, rag_answer: bool = False) -> None:
         self._registry = registry
         self._limits = limits
+        # K-4 #15: при включённом RAG-ответе INFO_QA отвечает через kb.answer (синтез),
+        # иначе — детерминированными цитатами kb.search. По умолчанию ВЫКЛ (поведение M5).
+        self._rag_answer = rag_answer
 
     async def run(
         self,
@@ -119,6 +123,10 @@ class ReasoningLoop:
             return await self._handle_tool_call(decision, intent, query_masked, context, confirmed)
         # ANSWER
         if intent is Intent.INFO_QA and _KB_SEARCH in decision.allowed_tools:
+            # K-4 #15: RAG-синтез (kb.answer) при включении и наличии инструмента;
+            # иначе — детерминированные цитаты kb.search (поведение M5).
+            if self._rag_answer and self._registry.get(_KB_ANSWER) is not None:
+                return await self._answer_from_kb_rag(query_masked, context)
             return await self._answer_from_kb(query_masked, context)
         if intent is Intent.SMALL_TALK:
             return LoopResult(reply=_SMALL_TALK_REPLY)
@@ -239,6 +247,33 @@ class ReasoningLoop:
         summary = wrap_untrusted(f"kb.search: {len(citations)} результат(ов)")
         obs = Observation(tool=_KB_SEARCH, unavailable=result.unavailable, summary=summary)
         if result.unavailable or not citations:
+            return LoopResult(
+                reply=_NO_ANSWER_REPLY, observations=[obs], tool_calls=1, steps=2, degraded=True
+            )
+        return LoopResult(
+            reply=_build_answer(result.data, citations),
+            observations=[obs],
+            tool_calls=1,
+            steps=2,
+        )
+
+    async def _answer_from_kb_rag(self, query_masked: str, context: ToolContext) -> LoopResult:
+        """RAG-ответ через kb.answer (chat-роут, синтез). Деградация (нет ответа/сбой) →
+        _NO_ANSWER_REPLY (не падаем, не выдумываем); цитаты прикладываются как источники."""
+        if self._limits.max_tool_calls < 1:
+            return LoopResult(reply=_NO_ANSWER_REPLY, steps=1, degraded=True)
+        try:
+            result = await self._registry.call(_KB_ANSWER, {"query": query_masked}, context)
+        except Exception:
+            obs = Observation(tool=_KB_ANSWER, unavailable=True, summary=wrap_untrusted("error"))
+            return LoopResult(
+                reply=_NO_ANSWER_REPLY, observations=[obs], tool_calls=1, steps=2, degraded=True
+            )
+        answer = result.data.get("answer")
+        citations = result.data.get("citations") or []
+        summary = wrap_untrusted(f"kb.answer: {len(citations)} источник(ов)")
+        obs = Observation(tool=_KB_ANSWER, unavailable=result.unavailable, summary=summary)
+        if result.unavailable or not answer:
             return LoopResult(
                 reply=_NO_ANSWER_REPLY, observations=[obs], tool_calls=1, steps=2, degraded=True
             )

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import pytest
 
+from api.clients.chat.models import ChatAnswer
 from api.clients.search.models import Citation, SearchResult
 from api.tools.base import ToolContext, ToolResult
+from api.tools.chat_answer import KbAnswerTool
 from api.tools.registry import ToolNotFoundError, ToolRegistry
 from api.tools.search import KbSearchTool
 
@@ -71,6 +73,43 @@ async def test_kb_search_tool_passes_on_behalf_of() -> None:
 async def test_kb_search_tool_propagates_unavailable() -> None:
     reg = _registry(KbSearchTool(_FakeSearchClient(SearchResult(query="q", unavailable=True))))
     out = await reg.call("kb.search", {"query": "q"}, ToolContext())
+    assert out.unavailable is True
+
+
+# --- kb.answer (RAG, #15) --------------------------------------------------
+
+
+class _FakeChatClient:
+    def __init__(self, result: ChatAnswer) -> None:
+        self._result = result
+        self.last_on_behalf_of: str | None = None
+
+    async def answer(self, *, query_masked: str, on_behalf_of: str | None = None) -> ChatAnswer:
+        self.last_on_behalf_of = on_behalf_of
+        return self._result
+
+
+async def test_kb_answer_tool_returns_synthesized_answer_and_citations() -> None:
+    result = ChatAnswer(
+        query="q",
+        answer="Договор продлевается за 30 дней.",
+        citations=[Citation(source_id="kb-1", title="Аренда", snippet="", url="/articles/a1")],
+    )
+    reg = ToolRegistry()
+    reg.register(KbAnswerTool(_FakeChatClient(result)))
+    out = await reg.call("kb.answer", {"query": "как продлить"}, ToolContext())
+    assert isinstance(out, ToolResult)
+    assert out.unavailable is False
+    assert out.data["answer"] == "Договор продлевается за 30 дней."
+    assert out.data["citations"][0]["source_id"] == "kb-1"
+
+
+async def test_kb_answer_tool_passes_on_behalf_of_and_propagates_unavailable() -> None:
+    client = _FakeChatClient(ChatAnswer(query="q", unavailable=True))
+    reg = ToolRegistry()
+    reg.register(KbAnswerTool(client))
+    out = await reg.call("kb.answer", {"query": "q"}, ToolContext(on_behalf_of="user-7"))
+    assert client.last_on_behalf_of == "user-7"  # делегирование G7
     assert out.unavailable is True
 
 

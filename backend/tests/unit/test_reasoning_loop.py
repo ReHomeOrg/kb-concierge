@@ -73,6 +73,46 @@ async def test_info_qa_answer_with_citations() -> None:
     assert out.degraded is False
 
 
+class _FakeAnswerTool:
+    name = "kb.answer"
+    description = "fake"
+
+    def __init__(self, result: ToolResult) -> None:
+        self._result = result
+
+    async def run(self, payload: Mapping[str, Any], context: ToolContext) -> ToolResult:
+        return self._result
+
+
+async def test_info_qa_uses_rag_answer_when_enabled() -> None:
+    # K-4 #15: rag_answer=True + kb.answer зарегистрирован → INFO_QA через RAG-синтез.
+    reg = ToolRegistry()
+    reg.register(
+        _FakeAnswerTool(
+            ToolResult(data={"answer": "RAG-ответ", "citations": [{"title": "Аренда"}]})
+        )
+    )
+    loop = ReasoningLoop(reg, Limits(max_tool_calls=3), rag_answer=True)
+    out = await loop.run(
+        decision=_answer_decision(), intent=Intent.INFO_QA, query_masked="q", context=_CTX
+    )
+    assert "RAG-ответ" in out.reply  # синтез использован
+    assert "Аренда" in out.reply  # источник приложен
+    assert out.tool_calls == 1
+    assert out.degraded is False
+
+
+async def test_rag_answer_degrades_to_no_answer_when_unavailable() -> None:
+    reg = ToolRegistry()
+    reg.register(_FakeAnswerTool(ToolResult(data={"citations": []}, unavailable=True)))
+    loop = ReasoningLoop(reg, Limits(max_tool_calls=3), rag_answer=True)
+    out = await loop.run(
+        decision=_answer_decision(), intent=Intent.INFO_QA, query_masked="q", context=_CTX
+    )
+    assert out.degraded is True  # нет ответа → деградация (не выдумываем)
+    assert "специалист" in out.reply.lower()  # _NO_ANSWER_REPLY
+
+
 async def test_info_qa_degrades_when_unavailable() -> None:
     loop = _loop(_FakeKbTool(ToolResult(data={"citations": []}, unavailable=True)))
     out = await loop.run(
