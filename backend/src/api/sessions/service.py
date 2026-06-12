@@ -14,16 +14,12 @@ from api.auth.principal import Principal, PrincipalKind
 from api.auth.system_actors import AGENT_ACTOR_ID
 from api.config import Settings
 from api.errors import ProblemException
+from api.intent.service import IntentService
 from api.observability.pii_mask import mask_pii
 from api.sessions.access import can_access, resolve_owner
 from api.sessions.enums import AuditAction, SessionStatus, TurnRole
 from api.sessions.models import AgentSession, AgentTurn
 from api.sessions.repository import SessionRepository
-
-# Детерминированный ответ-заглушка хода (M1.3). Реальное распознавание намерения и
-# ответ — Intent Router (M2) и Reasoning Loop (M5); LLM в M1 НЕ вызывается (порядок
-# эпиков §14). Текст без ПДн → content_masked == content.
-_PLACEHOLDER_REPLY = "Принял ваше сообщение, обрабатываю запрос."
 
 
 def _audit_actor(principal: Principal) -> uuid.UUID:
@@ -36,9 +32,12 @@ def _audit_actor(principal: Principal) -> uuid.UUID:
 class SessionService:
     """Сервис диалоговых сессий на одну сессию запроса (request-scoped)."""
 
-    def __init__(self, repo: SessionRepository, settings: Settings) -> None:
+    def __init__(
+        self, repo: SessionRepository, settings: Settings, intent_service: IntentService
+    ) -> None:
         self._repo = repo
         self._settings = settings
+        self._intent = intent_service
 
     async def create_session(
         self,
@@ -91,12 +90,13 @@ class SessionService:
         content: str,
         correlation_id: str | None,
     ) -> AgentTurn:
-        """Записать реплику пользователя и вернуть ответ агента (M1.3 — плейсхолдер).
+        """Записать реплику пользователя, распознать намерение и вернуть ответ агента.
 
-        ПДн маскируются при записи (`content_masked`, G3). Реальное распознавание
-        намерения и содержательный ответ появятся в M2 (Intent Router) / M5 (loop);
-        здесь LLM не вызывается. Реплики упорядочены явным `ts` (now() в одной
-        транзакции константна — пользователь и ответ получили бы равный штамп).
+        ПДн маскируются при записи (`content_masked`, G3) и в классификатор идёт
+        ТОЛЬКО маска. Распознавание — Intent Router (M2): intent/confidence/трасса
+        пишутся на user-реплику (FR-5.4); ответ агента — детерминированный маршрут-
+        отклик (содержательный ответ из KB и tool-вызовы — M3+; clarify-цикл — M5).
+        Реплики упорядочены явным `ts` (now() в одной транзакции константна).
         """
         session = await self._repo.get_for_update(session_id)
         if session is None or not can_access(principal, session):
@@ -105,14 +105,23 @@ class SessionService:
             raise ProblemException.conflict(detail="Session is not active")
 
         base_ts = self._repo.now()
+        masked = mask_pii(content)
         user_turn = AgentTurn(
             session_id=session.id,
             role=TurnRole.USER,
             content=content,
-            content_masked=mask_pii(content),
+            content_masked=masked,
             correlation_id=correlation_id,
             ts=base_ts,
         )
+
+        # Распознавание намерения по МАСКИРОВАННОМУ тексту (G3); деградация → None.
+        outcome = await self._intent.classify(masked)
+        if outcome is not None:
+            user_turn.intent = outcome.intent.value
+            user_turn.confidence = outcome.confidence
+            user_turn.intent_trace = outcome.to_trace(base_ts)
+
         self._repo.add_turn(user_turn)
         self._repo.add_audit(
             session_id=session.id,
@@ -120,12 +129,22 @@ class SessionService:
             action=AuditAction.MESSAGE_RECEIVED.value,
             correlation_id=correlation_id,
         )
+        if outcome is not None:
+            self._repo.add_audit(
+                session_id=session.id,
+                actor_id=AGENT_ACTOR_ID,  # распознавание — инфраструктурное действие агента
+                action=AuditAction.INTENT_CLASSIFIED.value,
+                from_value=outcome.method,
+                to_value=outcome.intent.value,
+                correlation_id=correlation_id,
+            )
 
+        reply = self._intent.route_reply(outcome)
         agent_turn = AgentTurn(
             session_id=session.id,
             role=TurnRole.AGENT,
-            content=_PLACEHOLDER_REPLY,
-            content_masked=_PLACEHOLDER_REPLY,
+            content=reply,
+            content_masked=reply,
             correlation_id=correlation_id,
             ts=base_ts + datetime.timedelta(milliseconds=1),
         )

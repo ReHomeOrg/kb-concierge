@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from typing import Any
 
 from sqlalchemy import DateTime, Enum, Float, ForeignKey, Index, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -104,9 +106,11 @@ class AgentTurn(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     content_masked: Mapped[str] = mapped_column(Text, nullable=False)
 
-    # Трасса распознавания намерения (Intent Router, M2). До M2 — NULL.
+    # Распознавание намерения (Intent Router, M2). До классификации — NULL.
     intent: Mapped[str | None] = mapped_column(String(_ENUM_LEN), nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Трасса решения (метод/модель/версия/слоты/время) — объяснимость FR-5.4/NFR-10.
+    intent_trace: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     correlation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     ts: Mapped[datetime.datetime] = mapped_column(

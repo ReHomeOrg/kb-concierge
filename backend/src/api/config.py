@@ -61,6 +61,15 @@ class Settings(BaseSettings):
         default=30, ge=1, description="Скорость пополнения (устойчивый лимит реплик/мин)."
     )
 
+    # --- Intent Router (E5). Порог уверенности: ниже → clarify/handoff (M5+). Выбор
+    # LLM-провайдера; `null` → инертный (только rules). Боевой YandexGPT — ADR-0003. ---
+    intent_confidence_threshold: float = Field(
+        default=0.7, ge=0.0, le=1.0, description="Порог уверенности маршрутизации."
+    )
+    intent_llm_provider: str = Field(
+        default="null", description="Провайдер распознавания намерения: null|yandexgpt."
+    )
+
     # --- Keycloak Bearer JWT. Пустой auth_jwks_url → auth не сконфигурирован
     # (fail-closed 401). aud токена фронта/агента ДОЛЖЕН содержать `kb-concierge`. ---
     auth_jwks_url: str = Field(default="", description="URL JWKS Keycloak.")
