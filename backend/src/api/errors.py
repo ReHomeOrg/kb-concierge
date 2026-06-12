@@ -1,8 +1,8 @@
-"""RFC 7807 (`application/problem+json`) ошибки kb-support API.
+"""RFC 7807 (`application/problem+json`) ошибки kb-concierge API.
 
-Соответствует схеме `Error` контракта `04_openapi.yaml`. `ProblemException`
-поднимается в коде/зависимостях; зарегистрированный хендлер рендерит её в
-problem+json с нужным статусом.
+Соответствует схеме `Error` контракта `docs/openapi.yaml` (без ПДн в `detail`, G3).
+`ProblemException` поднимается в коде/зависимостях; зарегистрированный хендлер
+рендерит её в problem+json с нужным статусом.
 """
 
 from __future__ import annotations
@@ -86,6 +86,16 @@ class ProblemException(Exception):
             status=422,
             title="Unprocessable Entity",
             type_=f"{_ERROR_BASE}/unprocessable-entity",
+            detail=detail,
+        )
+
+    @classmethod
+    def too_many_requests(cls, detail: str | None = None) -> ProblemException:
+        """429 — превышен лимит публичного входа (rate-limit, NFR-12)."""
+        return cls(
+            status=429,
+            title="Too Many Requests",
+            type_=f"{_ERROR_BASE}/too-many-requests",
             detail=detail,
         )
 

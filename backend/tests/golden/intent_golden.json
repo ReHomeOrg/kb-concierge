@@ -1,0 +1,20 @@
+{
+  "_doc": "Стартовый golden-набор Intent Router (E5, §12). Владелец и расширение — Архитектор/kb-eval. Тексты — уже маскированные (content_masked), без ПДн. Целевая точность rules-пути — accuracy >= 0.8 (см. test_intent_golden.py).",
+  "cases": [
+    {"text": "Как продлить договор аренды?", "intent": "INFO_QA"},
+    {"text": "Какие документы нужны для заселения?", "intent": "INFO_QA"},
+    {"text": "Подскажите условия оплаты", "intent": "INFO_QA"},
+    {"text": "Где посмотреть правила проживания?", "intent": "INFO_QA"},
+    {"text": "Нужна генеральная уборка квартиры 60 м2", "intent": "PARTNER_SERVICE"},
+    {"text": "Организуйте переезд из двушки", "intent": "PARTNER_SERVICE"},
+    {"text": "Сломался смеситель, вызовите сантехника", "intent": "PARTNER_SERVICE"},
+    {"text": "Передать ключи новому жильцу", "intent": "PARTNER_SERVICE"},
+    {"text": "Хочу пожаловаться на качество", "intent": "SUPPORT_ISSUE"},
+    {"text": "Требую компенсацию за испорченную мебель", "intent": "SUPPORT_ISSUE"},
+    {"text": "Партнёр не приехал в назначенное время", "intent": "SUPPORT_ISSUE"},
+    {"text": "Оказано некачественно, недоволен", "intent": "SUPPORT_ISSUE"},
+    {"text": "Здравствуйте!", "intent": "SMALL_TALK"},
+    {"text": "Спасибо большое", "intent": "SMALL_TALK"},
+    {"text": "Расскажи анекдот про кота", "intent": "OUT_OF_SCOPE"}
+  ]
+}

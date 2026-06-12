@@ -49,6 +49,27 @@ class Settings(BaseSettings):
         default=90, ge=1, description="TTL авторизованной сессии (дни)."
     )
 
+    # --- Rate-limit публичного входа (NFR-12, анти-абьюз). Свой токен-бакет
+    # in-memory (без новых зависимостей); ключ — пользователь/анон-сессия. ---
+    rate_limit_enabled: bool = Field(
+        default=True, description="Включить лимит на POST /sessions/{id}/messages."
+    )
+    rate_limit_capacity: int = Field(
+        default=30, ge=1, description="Ёмкость бакета (burst-лимит реплик)."
+    )
+    rate_limit_refill_per_minute: int = Field(
+        default=30, ge=1, description="Скорость пополнения (устойчивый лимит реплик/мин)."
+    )
+
+    # --- Intent Router (E5). Порог уверенности: ниже → clarify/handoff (M5+). Выбор
+    # LLM-провайдера; `null` → инертный (только rules). Боевой YandexGPT — ADR-0003. ---
+    intent_confidence_threshold: float = Field(
+        default=0.7, ge=0.0, le=1.0, description="Порог уверенности маршрутизации."
+    )
+    intent_llm_provider: str = Field(
+        default="null", description="Провайдер распознавания намерения: null|yandexgpt."
+    )
+
     # --- Keycloak Bearer JWT. Пустой auth_jwks_url → auth не сконфигурирован
     # (fail-closed 401). aud токена фронта/агента ДОЛЖЕН содержать `kb-concierge`. ---
     auth_jwks_url: str = Field(default="", description="URL JWKS Keycloak.")
@@ -77,6 +98,13 @@ class Settings(BaseSettings):
     client_breaker_failure_threshold: int = Field(default=5, ge=1)
     client_breaker_reset_timeout: float = Field(default=30.0, gt=0)
     client_cache_ttl_seconds: int = Field(default=60, ge=1)
+
+    # --- Соседи-инструменты (§8). Base URL + fallback-токен (dev/test; боевой токен —
+    # через OAuth2 по ADR). ПУСТОЙ base_url → инструмент инертен/деградирует. ---
+    kb_search_api_base_url: str = Field(default="", description="Base URL kb-search (RAG).")
+    kb_search_api_token: str = Field(default="", description="Fallback-токен kb-search (dev).")
+    platform_api_base_url: str = Field(default="", description="Base URL rehome.one (контекст).")
+    platform_api_token: str = Field(default="", description="Fallback-токен rehome.one (dev).")
 
     # --- Dramatiq-воркер (durable исходящие события, фоновые задачи). ПУСТОЙ
     # broker_url → StubBroker, акторы инертны (broker/worker поднимает ops). ---

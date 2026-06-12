@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 # --- Регистрация доменных моделей (side-effect import) для autogenerate.
 # Каждый доменный пакет регистрирует свои таблицы в Base.metadata здесь
 # (добавляется по мере эпиков M1+: sessions/turns/audit/policies).
+import api.sessions.models  # noqa: F401  (E4: agent_sessions/agent_turns/audit_log)
 from api.config import get_settings
 from api.db.base import Base
 
