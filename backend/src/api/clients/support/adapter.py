@@ -19,16 +19,96 @@ from api.clients.base import ResilientHttpClient
 from api.clients.errors import ExternalServiceError
 from api.clients.support.models import TicketRef
 
-# Agent-ready эндпоинт kb-support: создание/ведение обращения (тикета) от агента.
+# Agent-ready база kb-support. `_TICKETS_PATH` — провизорный путь эскалации M6
+# (изолирован, сверяется с боевым контрактом при провижининге); write-инструменты
+# M7 используют реальные маршруты `_SUPPORT_BASE`.
 _TICKETS_PATH = "/api/v1/tickets"
+_SUPPORT_BASE = "/api/v1/support/tickets"
 
 
 class HttpKbSupportClient:
-    """Боевой клиент kb-support. Заводит тикет эскалации со снимком контекста."""
+    """Боевой клиент kb-support. Эскалация (M6) + write-инструменты тикетов (M7)."""
 
     def __init__(self, *, http_client: ResilientHttpClient, token_provider: TokenProvider) -> None:
         self._http = http_client
         self._token = token_provider
+
+    async def _headers(
+        self, *, on_behalf_of: str | None, correlation_id: str | None
+    ) -> dict[str, str]:
+        headers = {"Authorization": f"Bearer {await self._token.get_token()}"}
+        if on_behalf_of is not None:
+            headers["X-On-Behalf-Of"] = on_behalf_of  # делегирование прав (G7)
+        if correlation_id is not None:
+            headers["X-Correlation-Id"] = correlation_id  # сквозная трасса (NFR-13)
+        return headers
+
+    async def create_issue_from_chat(
+        self,
+        *,
+        chat_session_id: str,
+        requester_id: str,
+        subject_masked: str,
+        correlation_id: str | None = None,
+    ) -> TicketRef:
+        # SUPPORT_ISSUE автономно: тикет из чата, идемпотентность соседа по
+        # chat_session_id (FR-6.4). m2m (SP агента); subject уже маскирован (G3).
+        body = {
+            "chat_session_id": chat_session_id,
+            "requester_id": requester_id,
+            "subject": subject_masked,
+        }
+        return await self._post(
+            f"{_SUPPORT_BASE}/from-chat",
+            operation="create_issue",
+            json=body,
+            headers=await self._headers(on_behalf_of=None, correlation_id=correlation_id),
+        )
+
+    async def add_message(
+        self,
+        *,
+        ticket_id: str,
+        body_masked: str,
+        on_behalf_of: str | None = None,
+        correlation_id: str | None = None,
+    ) -> TicketRef:
+        # ВНЕШНЕЕ сообщение в тикет: is_internal ВСЕГДА False (инвариант
+        # «внутреннее ≠ внешнее»: агент не пишет внутренних заметок оператора).
+        body = {"body": body_masked, "is_internal": False}
+        return await self._post(
+            f"{_SUPPORT_BASE}/{ticket_id}/messages",
+            operation="add_message",
+            json=body,
+            headers=await self._headers(on_behalf_of=on_behalf_of, correlation_id=correlation_id),
+        )
+
+    async def get_status(
+        self,
+        *,
+        ticket_id: str,
+        on_behalf_of: str | None = None,
+        correlation_id: str | None = None,
+    ) -> TicketRef:
+        headers = await self._headers(on_behalf_of=on_behalf_of, correlation_id=correlation_id)
+        try:
+            response = await self._http.request(
+                "GET", f"{_SUPPORT_BASE}/{ticket_id}", operation="get_status", headers=headers
+            )
+        except ExternalServiceError:
+            return TicketRef(unavailable=True)
+        if response.status_code >= 400:
+            return TicketRef(unavailable=True)
+        return _to_ref(response.json())
+
+    async def _post(self, path: str, *, operation: str, **kwargs: Any) -> TicketRef:
+        try:
+            response = await self._http.request("POST", path, operation=operation, **kwargs)
+        except ExternalServiceError:
+            return TicketRef(unavailable=True)
+        if response.status_code >= 400:
+            return TicketRef(unavailable=True)
+        return _to_ref(response.json())
 
     async def create_ticket(
         self,
@@ -66,10 +146,16 @@ class HttpKbSupportClient:
 
 
 def _to_ref(payload: Any) -> TicketRef:
-    """Маппинг провизорного контракта kb-support → доменный DTO."""
+    """Маппинг провизорного контракта kb-support → доменный DTO (без ПДн)."""
     if not isinstance(payload, dict):
         return TicketRef(unavailable=True)
     ticket_id = payload.get("id") or payload.get("ticket_id")
     if ticket_id is None:
         return TicketRef(unavailable=True)
-    return TicketRef(ticket_id=str(ticket_id))
+    number = payload.get("number")
+    status = payload.get("status")
+    return TicketRef(
+        ticket_id=str(ticket_id),
+        number=str(number) if number is not None else None,
+        status=str(status) if status is not None else None,
+    )

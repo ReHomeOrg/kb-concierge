@@ -54,6 +54,8 @@ class AuditAction(str, enum.Enum):
     INTENT_CLASSIFIED = "INTENT_CLASSIFIED"  # E5: распознано намерение хода (M2)
     POLICY_DECISION = "POLICY_DECISION"  # §7: решение политики автономности (M4)
     TOOL_CALLED = "TOOL_CALLED"  # §6: вызов инструмента в ходе (M5, FR-6.3)
+    CONFIRMATION_REQUESTED = "CONFIRM_REQUESTED"  # §7.4: запрошено подтверждение (M7)
+    ACTION_TAKEN = "ACTION_TAKEN"  # §6.1: исполнено write-действие после согласия (M7)
     AGENT_RESPONDED = "AGENT_RESPONDED"
     HANDOFF_CREATED = "HANDOFF_CREATED"  # §7.3: эскалация человеку в kb-support (M6, FR-7.1)
     OPERATOR_REPLIED = "OPERATOR_REPLIED"  # §7.3: ответ оператора возвращён в диалог (M6, FR-7.2)

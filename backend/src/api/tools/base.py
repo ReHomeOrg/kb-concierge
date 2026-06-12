@@ -15,10 +15,12 @@ from typing import Any, Protocol, runtime_checkable
 @dataclass(frozen=True)
 class ToolContext:
     """Контекст вызова инструмента. `on_behalf_of` — делегирование прав пользователя
-    (G7); `correlation_id` — сквозная трасса (NFR-13)."""
+    (G7); `correlation_id` — сквозная трасса (NFR-13); `session_id` — идентификатор
+    диалоговой сессии для идемпотентного приёма write-инструментами (FR-6.4)."""
 
     on_behalf_of: str | None = None
     correlation_id: str | None = None
+    session_id: str | None = None
 
 
 @dataclass(frozen=True)

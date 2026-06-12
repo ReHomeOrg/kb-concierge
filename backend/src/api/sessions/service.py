@@ -9,17 +9,21 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from typing import Any
 
 from api.auth.principal import Principal, PrincipalKind
 from api.auth.system_actors import AGENT_ACTOR_ID
 from api.config import Settings
 from api.errors import ProblemException
 from api.handoff.service import HandoffService
+from api.intent.enums import Intent
 from api.intent.service import IntentService
 from api.observability.pii_mask import mask_pii
-from api.policy.enums import AgentActionKind
+from api.policy.engine import PolicyDecision
+from api.policy.enums import AgentActionKind, DecisionReason
 from api.policy.service import PolicyService
-from api.reasoning.loop import ReasoningLoop
+from api.reasoning.confirmation import Confirmation, detect_confirmation
+from api.reasoning.loop import LoopResult, ReasoningLoop
 from api.sessions.access import can_access, resolve_owner
 from api.sessions.enums import AuditAction, SessionStatus, TurnRole
 from api.sessions.models import AgentSession, AgentTurn
@@ -28,6 +32,24 @@ from api.tools.base import ToolContext
 
 # Ответ хода при деградации распознавания (намерение не определено, FR-6.6).
 _DEGRADED_REPLY = "Принял ваше сообщение, обрабатываю запрос."
+# Ответы разрешения подтверждения (FR-7.4).
+_DECLINE_REPLY = "Хорошо, отменил. Если понадобится — обращайтесь."
+_REASK_REPLY = "Нужно ваше подтверждение: оформляем заявку? Ответьте «да» или «нет»."
+
+
+def _decision_from_pending(pending: dict[str, Any]) -> PolicyDecision:
+    """Восстановить решение TOOL_CALL из отложенного действия (для исполнения по согласию)."""
+    try:
+        reason = DecisionReason(pending["reason"])
+    except (KeyError, ValueError):
+        reason = DecisionReason.PAID_NEEDS_CONFIRMATION
+    return PolicyDecision(
+        outcome=AgentActionKind.TOOL_CALL,
+        reason=reason,
+        policy_version=str(pending.get("policy_version", "")),
+        allowed_tools=tuple(pending.get("tools", ())),
+        requires_confirmation=True,
+    )
 
 
 def _audit_actor(principal: Principal) -> uuid.UUID:
@@ -130,27 +152,23 @@ class SessionService:
             ts=base_ts,
         )
 
-        # Распознавание (G3) → решение политики (§7) → исполнение цикла (§6).
-        outcome = await self._intent.classify(masked)
-        decision = None
-        reply = _DEGRADED_REPLY
-        loop_result = None
-        if outcome is not None:
-            decision = self._policy.decide(outcome.intent, outcome.confidence, masked)
-            tool_context = ToolContext(on_behalf_of=session.user_id, correlation_id=correlation_id)
-            loop_result = await reasoning_loop.run(
-                decision=decision,
-                intent=outcome.intent,
-                query_masked=masked,
-                context=tool_context,
+        tool_context = ToolContext(
+            on_behalf_of=session.user_id,
+            correlation_id=correlation_id,
+            session_id=str(session.id),
+        )
+
+        # Ветвление: ожидающее подтверждение (FR-7.4) ИЛИ новая маршрутизация (M2→M4→M5).
+        # `extra_audits` — действия агента (actor = SP агента); MESSAGE_RECEIVED — у актора.
+        extra_audits: list[tuple[str, str | None, str | None]] = []
+        if session.pending_action is not None:
+            reply, loop_result = await self._resolve_pending(
+                session, masked, tool_context, reasoning_loop, user_turn, extra_audits
             )
-            reply = loop_result.reply
-            trace = outcome.to_trace(base_ts)
-            trace["policy"] = decision.to_trace()
-            trace["loop"] = loop_result.to_trace()
-            user_turn.intent = outcome.intent.value
-            user_turn.confidence = outcome.confidence
-            user_turn.intent_trace = trace
+        else:
+            reply, loop_result = await self._route_new(
+                session, masked, base_ts, tool_context, reasoning_loop, user_turn, extra_audits
+            )
 
         self._repo.add_turn(user_turn)
         self._repo.add_audit(
@@ -159,32 +177,28 @@ class SessionService:
             action=AuditAction.MESSAGE_RECEIVED.value,
             correlation_id=correlation_id,
         )
-        if outcome is not None and decision is not None and loop_result is not None:
-            self._repo.add_audit(
-                session_id=session.id,
-                actor_id=AGENT_ACTOR_ID,  # распознавание/решение — инфраструктурные действия агента
-                action=AuditAction.INTENT_CLASSIFIED.value,
-                from_value=outcome.method,
-                to_value=outcome.intent.value,
-                correlation_id=correlation_id,
-            )
-            self._repo.add_audit(
-                session_id=session.id,
-                actor_id=AGENT_ACTOR_ID,
-                action=AuditAction.POLICY_DECISION.value,
-                from_value=decision.outcome.value,
-                to_value=decision.reason.value,
-                correlation_id=correlation_id,
-            )
+        # Tool-вызовы (FR-6.3) и исполненное write-действие (§6.1) — общий аудит обеих веток.
+        if loop_result is not None:
             for obs in loop_result.observations:
-                self._repo.add_audit(
-                    session_id=session.id,
-                    actor_id=AGENT_ACTOR_ID,
-                    action=AuditAction.TOOL_CALLED.value,
-                    from_value="unavailable" if obs.unavailable else "ok",
-                    to_value=obs.tool,
-                    correlation_id=correlation_id,
+                extra_audits.append(
+                    (
+                        AuditAction.TOOL_CALLED.value,
+                        "unavailable" if obs.unavailable else "ok",
+                        obs.tool,
+                    )
                 )
+            if loop_result.action_taken:
+                executed = ",".join(o.tool for o in loop_result.observations)
+                extra_audits.append((AuditAction.ACTION_TAKEN.value, "executed", executed or None))
+        for action, from_value, to_value in extra_audits:
+            self._repo.add_audit(
+                session_id=session.id,
+                actor_id=AGENT_ACTOR_ID,  # действия агента (распознавание/решение/действие)
+                action=action,
+                from_value=from_value,
+                to_value=to_value,
+                correlation_id=correlation_id,
+            )
 
         # Эскалация человеку (§7.3): решение политики → реальная передача в kb-support.
         # Снимок берётся ПОСЛЕ добавления user-реплики (autoflush в list_turns) — он
@@ -215,6 +229,106 @@ class SessionService:
         await self._repo.flush_refresh(agent_turn)
         await self._repo.commit()
         return agent_turn
+
+    async def _route_new(
+        self,
+        session: AgentSession,
+        masked: str,
+        base_ts: datetime.datetime,
+        tool_context: ToolContext,
+        reasoning_loop: ReasoningLoop,
+        user_turn: AgentTurn,
+        extra_audits: list[tuple[str, str | None, str | None]],
+    ) -> tuple[str, LoopResult | None]:
+        """Новая реплика: распознавание (G3) → политика §7 → ход §6.
+
+        TOOL_CALL с подтверждением (FR-7.4) → ход возвращает предложение и
+        `awaiting_confirmation`; запоминаем отложенное действие на сессии (только
+        маскированный query, G3), действие НЕ исполняется до явного согласия.
+        """
+        outcome = await self._intent.classify(masked)
+        if outcome is None:
+            return _DEGRADED_REPLY, None
+        decision = self._policy.decide(outcome.intent, outcome.confidence, masked)
+        loop_result = await reasoning_loop.run(
+            decision=decision,
+            intent=outcome.intent,
+            query_masked=masked,
+            context=tool_context,
+            confirmed=False,
+        )
+        trace = outcome.to_trace(base_ts)
+        trace["policy"] = decision.to_trace()
+        trace["loop"] = loop_result.to_trace()
+        user_turn.intent = outcome.intent.value
+        user_turn.confidence = outcome.confidence
+        user_turn.intent_trace = trace
+
+        extra_audits.append(
+            (AuditAction.INTENT_CLASSIFIED.value, outcome.method, outcome.intent.value)
+        )
+        extra_audits.append(
+            (AuditAction.POLICY_DECISION.value, decision.outcome.value, decision.reason.value)
+        )
+        if loop_result.awaiting_confirmation:
+            session.pending_action = {
+                "tools": list(decision.allowed_tools),
+                "intent": outcome.intent.value,
+                "query_masked": masked,  # маскированный (G3)
+                "policy_version": decision.policy_version,
+                "reason": decision.reason.value,
+            }
+            extra_audits.append(
+                (
+                    AuditAction.CONFIRMATION_REQUESTED.value,
+                    outcome.intent.value,
+                    decision.reason.value,
+                )
+            )
+        return loop_result.reply, loop_result
+
+    async def _resolve_pending(
+        self,
+        session: AgentSession,
+        masked: str,
+        tool_context: ToolContext,
+        reasoning_loop: ReasoningLoop,
+        user_turn: AgentTurn,
+        extra_audits: list[tuple[str, str | None, str | None]],
+    ) -> tuple[str, LoopResult | None]:
+        """Разрешить ожидающее подтверждение (FR-7.4): согласие → исполнить, отказ →
+        отменить, неясно → переспросить (детерминированно, не LLM; G6)."""
+        pending: dict[str, Any] = session.pending_action or {}
+        verdict = detect_confirmation(masked)
+        trace: dict[str, Any] = {
+            "confirmation": verdict.value,
+            "pending_intent": pending.get("intent"),
+        }
+
+        if verdict is Confirmation.YES:
+            decision = _decision_from_pending(pending)
+            try:
+                intent = Intent(pending.get("intent", ""))
+            except ValueError:
+                intent = Intent.NON_STANDARD
+            loop_result = await reasoning_loop.run(
+                decision=decision,
+                intent=intent,
+                query_masked=str(pending.get("query_masked", "")),
+                context=tool_context,
+                confirmed=True,  # явное согласие пользователя (FR-7.4)
+            )
+            trace["loop"] = loop_result.to_trace()
+            user_turn.intent_trace = trace
+            session.pending_action = None
+            return loop_result.reply, loop_result
+
+        user_turn.intent_trace = trace
+        if verdict is Confirmation.NO:
+            session.pending_action = None  # отказ — действие не инициируется
+            return _DECLINE_REPLY, None
+        # UNCLEAR → переспрашиваем, отложенное действие сохраняется.
+        return _REASK_REPLY, None
 
     async def forget_session(
         self, principal: Principal, session_id: uuid.UUID, correlation_id: str | None
