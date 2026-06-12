@@ -130,6 +130,12 @@ async def test_handoff_and_clarify_replies(outcome: AgentActionKind, needle: str
     out = await loop.run(decision=decision, intent=Intent.INFO_QA, query_masked="q", context=_CTX)
     assert needle in out.reply.lower()
     assert out.tool_calls == 0
+    # HANDOFF несёт сигнал эскалации (§7.3) с причиной решения; CLARIFY — нет.
+    if outcome is AgentActionKind.HANDOFF:
+        assert out.handoff is True
+        assert out.handoff_reason == DecisionReason.LOW_CONFIDENCE.value
+    else:
+        assert out.handoff is False
 
 
 async def test_tool_call_requires_confirmation_reply() -> None:
