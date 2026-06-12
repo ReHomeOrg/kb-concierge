@@ -122,6 +122,12 @@ class Settings(BaseSettings):
     # --- Dramatiq-воркер (durable исходящие события, фоновые задачи). ПУСТОЙ
     # broker_url → StubBroker, акторы инертны (broker/worker поднимает ops). ---
     worker_broker_url: str = Field(default="", description="Redis-broker Dramatiq. ПУСТО → Stub.")
+    # --- Исходящие webhooks событий агента (§10, M8). ПУСТОЙ subscriber_url → события
+    # не публикуются (outbox не наполняется). Секрет HMAC — ссылкой на kb-vault. ---
+    webhook_subscriber_url: str = Field(
+        default="", description="URL подписчика событий агента. ПУСТО → webhooks off."
+    )
+    webhook_hmac_secret: str = Field(default="", description="Секрет HMAC-подписи (kb-vault).")
     outbox_batch_size: int = Field(default=50, ge=1, le=500)
     outbox_max_attempts: int = Field(default=5, ge=1, le=20)
     outbox_retry_base_seconds: float = Field(default=30.0, gt=0)

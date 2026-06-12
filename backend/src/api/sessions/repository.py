@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.sessions.models import AgentSession, AgentTurn, AuditLog
+from api.webhooks.enums import OutboxStatus
+from api.webhooks.models import OutboxEvent
 
 
 class SessionRepository:
@@ -86,6 +89,19 @@ class SessionRepository:
                 action=action,
                 from_value=from_value,
                 to_value=to_value,
+                correlation_id=correlation_id,
+            )
+        )
+
+    def add_outbox_event(
+        self, event_type: str, payload: dict[str, Any], correlation_id: str | None = None
+    ) -> None:
+        """Поставить исходящее событие в outbox в транзакции хода (NFR-8, at-least-once)."""
+        self._db.add(
+            OutboxEvent(
+                event_type=event_type,
+                payload=payload,
+                status=OutboxStatus.PENDING,
                 correlation_id=correlation_id,
             )
         )

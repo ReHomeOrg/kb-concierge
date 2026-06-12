@@ -25,6 +25,7 @@ from api.handoff.enums import (
 from api.handoff.models import HandoffRecord
 from api.handoff.repository import HandoffRepository
 from api.handoff.snapshot import build_context_snapshot, snapshot_ref
+from api.observability.agent_metrics import record_handoff
 from api.observability.pii_mask import mask_pii
 from api.sessions.access import can_access
 from api.sessions.enums import AuditAction, SessionStatus, TurnRole
@@ -32,6 +33,7 @@ from api.sessions.models import AgentSession, AgentTurn
 from api.sessions.repository import SessionRepository
 from api.tools.base import ToolContext
 from api.tools.registry import ToolRegistry
+from api.webhooks import events
 
 _HANDOFF_TOOL = "handoff.to_operator"
 
@@ -45,10 +47,12 @@ class HandoffService:
         sessions: SessionRepository,
         handoffs: HandoffRepository,
         registry: ToolRegistry,
+        emit_events: bool = False,
     ) -> None:
         self._sessions = sessions
         self._handoffs = handoffs
         self._registry = registry
+        self._emit_events = emit_events  # публиковать webhook agent.handoff_created (§10)
 
     async def force_handoff(
         self, principal: Principal, session_id: uuid.UUID, correlation_id: str | None
@@ -166,6 +170,18 @@ class HandoffService:
             correlation_id=correlation_id,
         )
         self._handoffs.add(record)
+        record_handoff(trigger.value, status.value)  # наблюдаемость §11 (M8)
+        if self._emit_events:
+            self._sessions.add_outbox_event(
+                events.HANDOFF_CREATED,
+                events.handoff_payload(
+                    session_id=session.id,
+                    trigger=trigger.value,
+                    status=status.value,
+                    ticket_ref=ticket_id,
+                ),
+                correlation_id,
+            )
         if session.status is not SessionStatus.HANDED_OFF:
             session.status = SessionStatus.HANDED_OFF
         self._sessions.add_audit(

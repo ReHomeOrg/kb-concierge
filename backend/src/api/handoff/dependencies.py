@@ -68,4 +68,5 @@ async def get_handoff_service(
             sessions=SessionRepository(db),
             handoffs=HandoffRepository(db),
             registry=registry,
+            emit_events=bool(settings.webhook_subscriber_url),
         )
