@@ -1,8 +1,8 @@
-"""SQLAlchemy declarative base и общие mixin'ы для ORM-моделей kb-support.
+"""SQLAlchemy declarative base и общие mixin'ы для ORM-моделей kb-concierge.
 
-Все ORM модели (Ticket, TicketMessage, TicketHistory, CannedResponse, ...)
+Все доменные ORM-модели (AgentSession, AgentTurn, AuditLog, AutonomyPolicy, ...)
 наследуются от `Base`. `TimestampMixin` даёт стандартные `created_at` /
-`updated_at` (заявлен в bootstrap-комментарии #2 как «появится в #5+»).
+`updated_at` (server-side `now()`, UTC).
 """
 
 from __future__ import annotations
