@@ -1,6 +1,6 @@
 # ADR-0004 — Делегированная авторизация исходящих вызовов (OAuth2 token-exchange)
 
-- Статус: **Предложено** (2026-06-12) — ожидает approve Архитектора
+- Статус: **Принято** (2026-06-12) — approve Архитектора (Evgeniy) 2026-06-12
 - Контекст: ТЗ «Консьерж» v1.1 §8/§9, FR-9.7, guardrails G2/G7; Э0 находка CC-1; CLAUDE.md правило 6
 - Связанные: ADR-0001 (арх-константа), kb-partners ADR-0005 (token-exchange), `docs/E0-contract-reconciliation.md`
 
