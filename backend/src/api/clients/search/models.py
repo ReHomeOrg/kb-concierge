@@ -17,13 +17,13 @@ class Citation:
 
 @dataclass(frozen=True)
 class SearchResult:
-    """Результат поиска по базе знаний.
+    """Результат retrieval-поиска по базе знаний (K-4: только цитаты, без RAG-синтеза).
 
     `unavailable=True` — сосед недоступен (деградация, FR-6.6): агент не падает, а
-    эскалирует/уточняет. Текст ответа `answer` опционален (RAG-синтез на стороне kb-search).
+    эскалирует/уточняет. Текст ответа (RAG-синтез) — отдельный инструмент поверх
+    chat-роота kb-search (issue #15), здесь его нет.
     """
 
     query: str
     citations: list[Citation] = field(default_factory=list)
-    answer: str | None = None
     unavailable: bool = False

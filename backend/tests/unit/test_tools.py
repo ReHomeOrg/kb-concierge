@@ -48,16 +48,16 @@ async def test_registry_unknown_tool_raises() -> None:
 
 
 async def test_kb_search_tool_returns_citations() -> None:
+    # K-4: kb.search отдаёт только цитаты (без answer — RAG-синтез это отдельный инструмент #15).
     result = SearchResult(
         query="q",
         citations=[Citation(source_id="kb-1", title="t", snippet="s")],
-        answer="ответ",
     )
     reg = _registry(KbSearchTool(_FakeSearchClient(result)))
     out = await reg.call("kb.search", {"query": "как продлить"}, ToolContext())
     assert isinstance(out, ToolResult)
     assert out.unavailable is False
-    assert out.data["answer"] == "ответ"
+    assert "answer" not in out.data  # K-4: цитаты-only
     assert out.data["citations"][0]["source_id"] == "kb-1"
 
 

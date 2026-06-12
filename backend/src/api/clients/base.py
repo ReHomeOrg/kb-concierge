@@ -117,3 +117,30 @@ class ResilientHttpClient:
             ttl = cache_ttl_seconds if cache_ttl_seconds is not None else 60
             await cache.set(cache_key, json.dumps(payload), ttl)
         return payload
+
+    async def post_json(
+        self,
+        url: str,
+        *,
+        operation: str,
+        cache: Cache | None = None,
+        cache_key: str | None = None,
+        cache_ttl_seconds: int | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Cache-aside POST → JSON. Для идемпотентных read-операций на POST (напр.
+        `POST /api/v1/search`): кеш по `cache_key` (запрос), тело — в `kwargs['json']`.
+        Семантика кеша/ошибок — как у `get_json`. Не использовать для write-операций.
+        """
+        if cache is not None and cache_key is not None:
+            cached = await cache.get(cache_key)
+            if cached is not None:
+                return json.loads(cached)
+
+        response = await self.request("POST", url, operation=operation, **kwargs)
+        payload = response.json()
+
+        if cache is not None and cache_key is not None and response.status_code < 300:
+            ttl = cache_ttl_seconds if cache_ttl_seconds is not None else 60
+            await cache.set(cache_key, json.dumps(payload), ttl)
+        return payload
