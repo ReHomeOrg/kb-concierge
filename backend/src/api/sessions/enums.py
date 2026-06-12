@@ -27,10 +27,16 @@ class SessionStatus(str, enum.Enum):
 
 
 class TurnRole(str, enum.Enum):
-    """Роль автора реплики диалога (§4 `AgentTurn.role`)."""
+    """Роль автора реплики диалога (§4 `AgentTurn.role`).
+
+    OPERATOR — ВНЕШНИЙ ответ человека-оператора, возвращённый в диалог через
+    operator-reply (M6, §7.3); отделён от AGENT (ответ ИИ). Внутренние заметки
+    оператора репликами НЕ становятся (инвариант «внутреннее ≠ внешнее», FR-7.3).
+    """
 
     USER = "USER"
     AGENT = "AGENT"
+    OPERATOR = "OPERATOR"
     TOOL = "TOOL"
     SYSTEM = "SYSTEM"
 
@@ -49,6 +55,8 @@ class AuditAction(str, enum.Enum):
     POLICY_DECISION = "POLICY_DECISION"  # §7: решение политики автономности (M4)
     TOOL_CALLED = "TOOL_CALLED"  # §6: вызов инструмента в ходе (M5, FR-6.3)
     AGENT_RESPONDED = "AGENT_RESPONDED"
+    HANDOFF_CREATED = "HANDOFF_CREATED"  # §7.3: эскалация человеку в kb-support (M6, FR-7.1)
+    OPERATOR_REPLIED = "OPERATOR_REPLIED"  # §7.3: ответ оператора возвращён в диалог (M6, FR-7.2)
     SESSION_FORGOTTEN = "SESSION_FORGOTTEN"
 
 

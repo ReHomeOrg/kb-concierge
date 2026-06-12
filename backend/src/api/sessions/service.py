@@ -14,8 +14,10 @@ from api.auth.principal import Principal, PrincipalKind
 from api.auth.system_actors import AGENT_ACTOR_ID
 from api.config import Settings
 from api.errors import ProblemException
+from api.handoff.service import HandoffService
 from api.intent.service import IntentService
 from api.observability.pii_mask import mask_pii
+from api.policy.enums import AgentActionKind
 from api.policy.service import PolicyService
 from api.reasoning.loop import ReasoningLoop
 from api.sessions.access import can_access, resolve_owner
@@ -101,6 +103,7 @@ class SessionService:
         content: str,
         correlation_id: str | None,
         reasoning_loop: ReasoningLoop,
+        handoff_service: HandoffService,
     ) -> AgentTurn:
         """Записать реплику, распознать намерение, решить политикой и ИСПОЛНИТЬ ход.
 
@@ -182,6 +185,16 @@ class SessionService:
                     to_value=obs.tool,
                     correlation_id=correlation_id,
                 )
+
+        # Эскалация человеку (§7.3): решение политики → реальная передача в kb-support.
+        # Снимок берётся ПОСЛЕ добавления user-реплики (autoflush в list_turns) — он
+        # содержит текущий вопрос; коммит — общий с ходом (escalate_in_turn без commit).
+        if loop_result is not None and loop_result.handoff:
+            await handoff_service.escalate_in_turn(
+                session=session,
+                reason=loop_result.handoff_reason or AgentActionKind.HANDOFF.value,
+                correlation_id=correlation_id,
+            )
 
         agent_turn = AgentTurn(
             session_id=session.id,

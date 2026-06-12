@@ -177,18 +177,44 @@ paths:
       operationId: forceHandoff
       responses:
         "202":
-          description: Эскалация принята.
+          description: Эскалация принята (status=PENDING при недоступности kb-support).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HandoffAccepted"
+        "404":
+          description: Сессия недоступна (анти-enumeration).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/v1/concierge/inbound/operator-reply:
     post:
       tags: [Inbound]
       summary: Возврат ответа оператора в диалог (SERVICE-only)
       operationId: operatorReply
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OperatorReplyIn"
       responses:
         "202":
-          description: Принято.
+          description: Принято — внешний ответ добавлен репликой в диалог.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentTurn"
         "403":
           description: Требуется сервис-принципал.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Сессия без активной эскалации.
           content:
             application/problem+json:
               schema:
@@ -260,3 +286,38 @@ components:
         intent:
           type: [string, "null"]
       additionalProperties: true
+
+    HandoffAccepted:
+      description: Результат эскалации человеку (§7.3).
+      type: object
+      required: [handoff_id, status]
+      properties:
+        handoff_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [OPEN, PENDING, RESOLVED]
+        ticket_ref:
+          type: [string, "null"]
+      additionalProperties: false
+
+    OperatorReplyIn:
+      description: >-
+        Внешний ответ оператора для возврата в диалог (FR-7.2). Внутренние заметки
+        НЕ передаются (инвариант «внутреннее ≠ внешнее», FR-7.3): посторонние поля
+        запрещены.
+      type: object
+      required: [session_id, message]
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        message:
+          type: string
+          minLength: 1
+          maxLength: 8000
+        ticket_ref:
+          type: [string, "null"]
+          maxLength: 255
+      additionalProperties: false

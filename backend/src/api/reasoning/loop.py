@@ -45,13 +45,20 @@ class Observation:
 
 @dataclass
 class LoopResult:
-    """Итог хода: ответ пользователю + наблюдения/счётчики (трасса, FR-6.3)."""
+    """Итог хода: ответ пользователю + наблюдения/счётчики (трасса, FR-6.3).
+
+    `handoff`/`handoff_reason` — сигнал эскалации человеку (§7.3): сам ход остаётся
+    чистым (без БД/сети к kb-support), фактическую передачу исполняет `HandoffService`
+    в транзакции хода. `handoff_reason` несёт `DecisionReason` решения политики.
+    """
 
     reply: str
     observations: list[Observation] = field(default_factory=list)
     tool_calls: int = 0
     steps: int = 1
     degraded: bool = False
+    handoff: bool = False
+    handoff_reason: str | None = None
 
     def to_trace(self) -> dict[str, Any]:
         return {
@@ -59,6 +66,7 @@ class LoopResult:
             "steps": self.steps,
             "degraded": self.degraded,
             "tools": [o.tool for o in self.observations],
+            "handoff": self.handoff,
         }
 
 
@@ -78,7 +86,10 @@ class ReasoningLoop:
         context: ToolContext,
     ) -> LoopResult:
         if decision.outcome is AgentActionKind.HANDOFF:
-            return LoopResult(reply=_HANDOFF_REPLY)
+            # Сигнал эскалации (§7.3): фактическую передачу исполнит HandoffService.
+            return LoopResult(
+                reply=_HANDOFF_REPLY, handoff=True, handoff_reason=decision.reason.value
+            )
         if decision.outcome is AgentActionKind.CLARIFY:
             return LoopResult(reply=_CLARIFY_REPLY)
         if decision.outcome is AgentActionKind.TOOL_CALL:
