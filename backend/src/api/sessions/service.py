@@ -16,10 +16,14 @@ from api.config import Settings
 from api.errors import ProblemException
 from api.intent.service import IntentService
 from api.observability.pii_mask import mask_pii
+from api.policy.service import PolicyService
 from api.sessions.access import can_access, resolve_owner
 from api.sessions.enums import AuditAction, SessionStatus, TurnRole
 from api.sessions.models import AgentSession, AgentTurn
 from api.sessions.repository import SessionRepository
+
+# Ответ хода при деградации распознавания (намерение не определено, FR-6.6).
+_DEGRADED_REPLY = "Принял ваше сообщение, обрабатываю запрос."
 
 
 def _audit_actor(principal: Principal) -> uuid.UUID:
@@ -33,11 +37,16 @@ class SessionService:
     """Сервис диалоговых сессий на одну сессию запроса (request-scoped)."""
 
     def __init__(
-        self, repo: SessionRepository, settings: Settings, intent_service: IntentService
+        self,
+        repo: SessionRepository,
+        settings: Settings,
+        intent_service: IntentService,
+        policy_service: PolicyService,
     ) -> None:
         self._repo = repo
         self._settings = settings
         self._intent = intent_service
+        self._policy = policy_service
 
     async def create_session(
         self,
@@ -116,11 +125,16 @@ class SessionService:
         )
 
         # Распознавание намерения по МАСКИРОВАННОМУ тексту (G3); деградация → None.
+        # Затем решение политики автономности (§7): что делать с ходом.
         outcome = await self._intent.classify(masked)
+        decision = None
         if outcome is not None:
+            decision = self._policy.decide(outcome.intent, outcome.confidence, masked)
+            trace = outcome.to_trace(base_ts)
+            trace["policy"] = decision.to_trace()
             user_turn.intent = outcome.intent.value
             user_turn.confidence = outcome.confidence
-            user_turn.intent_trace = outcome.to_trace(base_ts)
+            user_turn.intent_trace = trace
 
         self._repo.add_turn(user_turn)
         self._repo.add_audit(
@@ -129,17 +143,29 @@ class SessionService:
             action=AuditAction.MESSAGE_RECEIVED.value,
             correlation_id=correlation_id,
         )
-        if outcome is not None:
+        if outcome is not None and decision is not None:
             self._repo.add_audit(
                 session_id=session.id,
-                actor_id=AGENT_ACTOR_ID,  # распознавание — инфраструктурное действие агента
+                actor_id=AGENT_ACTOR_ID,  # распознавание/решение — инфраструктурные действия агента
                 action=AuditAction.INTENT_CLASSIFIED.value,
                 from_value=outcome.method,
                 to_value=outcome.intent.value,
                 correlation_id=correlation_id,
             )
+            self._repo.add_audit(
+                session_id=session.id,
+                actor_id=AGENT_ACTOR_ID,
+                action=AuditAction.POLICY_DECISION.value,
+                from_value=decision.outcome.value,
+                to_value=decision.reason.value,
+                correlation_id=correlation_id,
+            )
 
-        reply = self._intent.route_reply(outcome)
+        reply = (
+            self._policy.reply_for(decision, outcome.intent)
+            if outcome is not None and decision is not None
+            else _DEGRADED_REPLY
+        )
         agent_turn = AgentTurn(
             session_id=session.id,
             role=TurnRole.AGENT,

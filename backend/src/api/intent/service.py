@@ -1,32 +1,18 @@
-"""Сервисная обвязка распознавания намерения (E5): сборка провайдера по конфигурации,
-деградация при сбое (FR-6.6), детерминированный маршрут-ответ хода.
+"""Сервисная обвязка распознавания намерения (E5): сборка провайдера по конфигурации
+и деградация при сбое (FR-6.6).
 
-Сервис НЕ ходит в БД — он применяет классификатор к маскированному тексту и решает
-маршрут по порогу уверенности. Запись в `AgentTurn`/аудит — на `SessionService` (M2.2).
+Маршрутизацию хода (что делать с распознанным намерением) принимает Policy Engine
+(§7, M4) — здесь только распознавание.
 """
 
 from __future__ import annotations
 
 from api.config import Settings
 from api.intent.engine import IntentClassifier, IntentOutcome
-from api.intent.enums import Intent
 from api.intent.provider import NullLLMProvider
 from api.observability.logging import get_logger
 
 _logger = get_logger("intent")
-
-# Маршрут-ответы хода (детерминированные, БЕЗ LLM). Содержательный ответ из KB и
-# реальные tool-вызовы — M3+; clarify-цикл — M5. Здесь — только отражение маршрута.
-_ROUTE_REPLIES: dict[Intent, str] = {
-    Intent.INFO_QA: "Поищу ответ в базе знаний и вернусь с ним.",
-    Intent.PARTNER_SERVICE: "Передам это в подбор партнёрской услуги.",
-    Intent.SUPPORT_ISSUE: "Передам обращение в поддержку.",
-    Intent.NON_STANDARD: "Передам ситуацию специалисту.",
-    Intent.SMALL_TALK: "Рад помочь! Чем могу быть полезен?",
-    Intent.OUT_OF_SCOPE: "Это вне моей области, но помогу по аренде, услугам и поддержке.",
-}
-_CLARIFY_REPLY = "Уточните, пожалуйста, детали запроса, чтобы я направил его верно."
-_DEFAULT_REPLY = "Принял ваше сообщение, обрабатываю запрос."
 
 
 def build_intent_classifier(settings: Settings) -> IntentClassifier:
@@ -46,9 +32,8 @@ def build_intent_classifier(settings: Settings) -> IntentClassifier:
 class IntentService:
     """Распознавание намерения хода с безопасной деградацией."""
 
-    def __init__(self, classifier: IntentClassifier, threshold: float) -> None:
+    def __init__(self, classifier: IntentClassifier) -> None:
         self._classifier = classifier
-        self._threshold = threshold
 
     async def classify(self, masked_text: str) -> IntentOutcome | None:
         """Распознать намерение по маскированному тексту; сбой → None (деградация)."""
@@ -58,11 +43,3 @@ class IntentService:
             # FR-6.6: недоступность/сбой распознавания не валит ход и не выдумывает.
             _logger.warning("intent classification failed; degrading to no-intent")
             return None
-
-    def route_reply(self, outcome: IntentOutcome | None) -> str:
-        """Детерминированный ответ-отражение маршрута (ниже порога → уточнение)."""
-        if outcome is None:
-            return _DEFAULT_REPLY
-        if outcome.confidence < self._threshold:
-            return _CLARIFY_REPLY
-        return _ROUTE_REPLIES.get(outcome.intent, _DEFAULT_REPLY)

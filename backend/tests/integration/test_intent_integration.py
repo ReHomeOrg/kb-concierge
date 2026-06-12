@@ -53,26 +53,27 @@ async def test_partner_message_classified_with_trace(
     assert turn.intent_trace["slots"]["area_sqm"] == 50
 
 
-async def test_route_reply_reflects_intent(
+async def test_claim_routes_to_handoff(
     make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession
 ) -> None:
+    # Жалоба/претензия (claim-сигнал) → политика §7.1 → HANDOFF (специалист).
     principal = make_principal(PrincipalKind.USER)
     sess = await seed_session(user_id=str(principal.user_id))
     resp = await make_client(principal).post(
         f"{_MSGS}/{sess.id}/messages", json={"content": "Хочу пожаловаться на качество"}
     )
-    assert "поддержк" in resp.json()["content"].lower()
+    assert "специалист" in resp.json()["content"].lower()
 
 
 async def test_ambiguous_below_threshold_asks_clarify(
     make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession
 ) -> None:
-    # «пожаловаться» (SUPPORT) + «уборку» (PARTNER) → неоднозначно, NullLLM → conf 0.4
-    # < порога 0.7 → уточнение (не маршрут).
+    # «как продлить» (INFO) + «уборку» (PARTNER) → неоднозначно, NullLLM → conf 0.4
+    # < порога 0.7, без стоп-сигналов → политика → CLARIFY (уточнение).
     principal = make_principal(PrincipalKind.USER)
     sess = await seed_session(user_id=str(principal.user_id))
     resp = await make_client(principal).post(
-        f"{_MSGS}/{sess.id}/messages", json={"content": "Пожаловаться: уборку сделали плохо"}
+        f"{_MSGS}/{sess.id}/messages", json={"content": "как продлить уборку"}
     )
     assert "уточн" in resp.json()["content"].lower()
 

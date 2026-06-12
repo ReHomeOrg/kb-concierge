@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from api.intent.enums import Intent
 from api.policy.enums import AgentActionKind
@@ -78,3 +79,34 @@ class AutonomyMatrix:
     def rule_for(self, intent: Intent) -> IntentRule:
         """Правило намерения; неизвестное → безопасный фолбэк (эскалация)."""
         return self.rules.get(intent, IntentRule(autonomous=AgentActionKind.HANDOFF))
+
+    @classmethod
+    def from_policy(
+        cls,
+        *,
+        confidence_threshold: float,
+        version: str,
+        rules_json: dict[str, Any] | None,
+    ) -> AutonomyMatrix:
+        """Собрать матрицу из сохранённой политики (M4.3). NULL/битые правила → DEFAULT_MATRIX.
+
+        Некорректное правило отдельного намерения деградирует в встроенный дефолт
+        (безопасность важнее: не активируем мусорную автономию из БД).
+        """
+        if not rules_json:
+            return cls(confidence_threshold=confidence_threshold, version=version)
+        rules = dict(DEFAULT_MATRIX)
+        for intent in Intent:
+            spec = rules_json.get(intent.value)
+            if not isinstance(spec, dict):
+                continue
+            try:
+                rules[intent] = IntentRule(
+                    autonomous=AgentActionKind(spec["autonomous"]),
+                    allowed_tools=tuple(spec.get("allowed_tools", ())),
+                    requires_confirmation=bool(spec.get("requires_confirmation", False)),
+                    gated_by_confidence=bool(spec.get("gated_by_confidence", True)),
+                )
+            except (KeyError, ValueError):
+                continue
+        return cls(rules=rules, confidence_threshold=confidence_threshold, version=version)
