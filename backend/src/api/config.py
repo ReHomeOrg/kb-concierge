@@ -70,6 +70,11 @@ class Settings(BaseSettings):
         default="null", description="Провайдер распознавания намерения: null|yandexgpt."
     )
 
+    # --- Reasoning Loop (E6, bounded FR-6.2): лимиты на ход. ---
+    loop_max_tool_calls: int = Field(default=3, ge=0, le=20, description="Макс. tool-вызовов/ход.")
+    loop_max_steps: int = Field(default=5, ge=1, le=50, description="Макс. шагов цикла/ход.")
+    loop_token_budget: int = Field(default=4000, ge=1, description="Бюджет токенов (с боевым LLM).")
+
     # --- Keycloak Bearer JWT. Пустой auth_jwks_url → auth не сконфигурирован
     # (fail-closed 401). aud токена фронта/агента ДОЛЖЕН содержать `kb-concierge`. ---
     auth_jwks_url: str = Field(default="", description="URL JWKS Keycloak.")
