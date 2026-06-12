@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import httpx
 
-from api.clients.auth import StaticTokenProvider
+from api.clients.auth import StaticTokenProvider, TokenProvider
 from api.clients.base import ResilientHttpClient
 from api.clients.circuit_breaker import CircuitBreaker
+from api.clients.errors import ExternalServiceError
 from api.clients.retry import RetryPolicy
 from api.clients.search.adapter import HttpKbSearchClient
 
@@ -15,7 +16,35 @@ async def _nosleep(_: float) -> None:
     return None
 
 
-def _client(handler: httpx.MockTransport) -> tuple[HttpKbSearchClient, httpx.AsyncClient]:
+class _DelegatingToken:
+    """Фейк: возвращает РАЗНЫЙ токен с/без делегирования — чтобы проверить, что в
+    Authorization уходит делегированный токен (token-exchange), а не заголовок (CC-1)."""
+
+    async def get_token(self, on_behalf_of: str | None = None) -> str:
+        return f"delegated:{on_behalf_of}" if on_behalf_of is not None else "m2m"
+
+
+class _FailingToken:
+    """Фейк: получение токена падает (Keycloak/обмен недоступны) — проверка деградации G6."""
+
+    async def get_token(self, on_behalf_of: str | None = None) -> str:
+        raise ExternalServiceError("keycloak", "token", "down")
+
+
+async def test_search_degrades_when_token_fails() -> None:
+    # CC-1/G6: сбой получения делегир. токена → unavailable, ход не падает.
+    client, http = _client(
+        httpx.MockTransport(lambda r: httpx.Response(200, json={"results": []})),
+        token_provider=_FailingToken(),
+    )
+    async with http:
+        ref = await client.search(query_masked="вопрос", on_behalf_of="u-1")
+    assert ref.unavailable is True
+
+
+def _client(
+    handler: httpx.MockTransport, token_provider: TokenProvider | None = None
+) -> tuple[HttpKbSearchClient, httpx.AsyncClient]:
     http = httpx.AsyncClient(transport=handler, base_url="http://kb-search")
     resilient = ResilientHttpClient(
         client_name="kb_search",
@@ -25,7 +54,9 @@ def _client(handler: httpx.MockTransport) -> tuple[HttpKbSearchClient, httpx.Asy
         sleep=_nosleep,
         monotonic=lambda: 0.0,
     )
-    return HttpKbSearchClient(http_client=resilient, token_provider=StaticTokenProvider("t")), http
+    return HttpKbSearchClient(
+        http_client=resilient, token_provider=token_provider or StaticTokenProvider("t")
+    ), http
 
 
 async def test_search_maps_citations() -> None:
@@ -45,18 +76,20 @@ async def test_search_maps_citations() -> None:
     assert result.citations[0].url == "https://kb/1"
 
 
-async def test_search_passes_on_behalf_of_header() -> None:
+async def test_search_delegates_via_token_not_header() -> None:
+    # CC-1: делегирование прав уходит В ТОКЕНЕ (token-exchange), а НЕ заголовком
+    # X-On-Behalf-Of (соседи его не читают).
     seen: dict[str, str] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.update(request.headers)
         return httpx.Response(200, json={"results": []})
 
-    client, http = _client(httpx.MockTransport(handler))
+    client, http = _client(httpx.MockTransport(handler), token_provider=_DelegatingToken())
     async with http:
         await client.search(query_masked="вопрос", on_behalf_of="user-42")
-    assert seen.get("x-on-behalf-of") == "user-42"  # делегирование прав (G7)
-    assert seen.get("authorization") == "Bearer t"
+    assert seen.get("authorization") == "Bearer delegated:user-42"  # делегированный токен (G7)
+    assert "x-on-behalf-of" not in seen  # мёртвый заголовок убран
 
 
 async def test_search_degrades_on_unavailable() -> None:

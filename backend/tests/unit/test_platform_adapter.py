@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import httpx
 
-from api.clients.auth import StaticTokenProvider
+from api.clients.auth import StaticTokenProvider, TokenProvider
 from api.clients.base import ResilientHttpClient
 from api.clients.circuit_breaker import CircuitBreaker
+from api.clients.errors import ExternalServiceError
 from api.clients.platform.adapter import HttpPlatformClient
 from api.clients.retry import RetryPolicy
 
@@ -18,7 +19,34 @@ async def _nosleep(_: float) -> None:
     return None
 
 
-def _client(handler: httpx.MockTransport) -> tuple[HttpPlatformClient, httpx.AsyncClient]:
+class _DelegatingToken:
+    """Фейк: разный токен с/без делегирования (проверка CC-1 — делегирование в токене)."""
+
+    async def get_token(self, on_behalf_of: str | None = None) -> str:
+        return f"delegated:{on_behalf_of}" if on_behalf_of is not None else "m2m"
+
+
+class _FailingToken:
+    """Фейк: получение токена падает (Keycloak/обмен недоступны) — проверка деградации G6."""
+
+    async def get_token(self, on_behalf_of: str | None = None) -> str:
+        raise ExternalServiceError("keycloak", "token", "down")
+
+
+async def test_get_context_degrades_when_token_fails() -> None:
+    # CC-1/G6: сбой получения делегир. токена → unavailable, ход не падает.
+    client, http = _client(
+        httpx.MockTransport(lambda r: httpx.Response(200, json={})),
+        token_provider=_FailingToken(),
+    )
+    async with http:
+        ctx = await client.get_context(user_id="u-1", on_behalf_of="u-1")
+    assert ctx.unavailable is True
+
+
+def _client(
+    handler: httpx.MockTransport, token_provider: TokenProvider | None = None
+) -> tuple[HttpPlatformClient, httpx.AsyncClient]:
     http = httpx.AsyncClient(transport=handler, base_url="http://rehome")
     resilient = ResilientHttpClient(
         client_name="platform",
@@ -28,7 +56,9 @@ def _client(handler: httpx.MockTransport) -> tuple[HttpPlatformClient, httpx.Asy
         sleep=_nosleep,
         monotonic=lambda: 0.0,
     )
-    return HttpPlatformClient(http_client=resilient, token_provider=StaticTokenProvider("t")), http
+    return HttpPlatformClient(
+        http_client=resilient, token_provider=token_provider or StaticTokenProvider("t")
+    ), http
 
 
 async def test_get_context_maps_premises_and_bookings() -> None:
@@ -62,17 +92,19 @@ async def test_get_context_drops_money_fields() -> None:
         assert forbidden not in blob
 
 
-async def test_get_context_passes_on_behalf_of() -> None:
+async def test_get_context_delegates_via_token_not_header() -> None:
+    # CC-1: делегирование — в токене (token-exchange), не заголовком X-On-Behalf-Of.
     seen: dict[str, str] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.update(request.headers)
         return httpx.Response(200, json={})
 
-    client, http = _client(httpx.MockTransport(handler))
+    client, http = _client(httpx.MockTransport(handler), token_provider=_DelegatingToken())
     async with http:
         await client.get_context(user_id="u-1", on_behalf_of="u-1")
-    assert seen.get("x-on-behalf-of") == "u-1"
+    assert seen.get("authorization") == "Bearer delegated:u-1"  # делегированный токен (G7)
+    assert "x-on-behalf-of" not in seen  # мёртвый заголовок убран
 
 
 async def test_get_context_degrades_on_unavailable() -> None:

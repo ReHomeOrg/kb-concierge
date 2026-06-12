@@ -36,9 +36,11 @@ class HttpKbSupportClient:
     async def _headers(
         self, *, on_behalf_of: str | None, correlation_id: str | None
     ) -> dict[str, str]:
-        headers = {"Authorization": f"Bearer {await self._token.get_token()}"}
-        if on_behalf_of is not None:
-            headers["X-On-Behalf-Of"] = on_behalf_of  # делегирование прав (G7)
+        # Делегирование прав — в самом токене (token-exchange), НЕ заголовком
+        # X-On-Behalf-Of (kb-support читает on-behalf-of из claim'а; CC-1/ADR-0004).
+        headers = {
+            "Authorization": f"Bearer {await self._token.get_token(on_behalf_of=on_behalf_of)}"
+        }
         if correlation_id is not None:
             headers["X-Correlation-Id"] = correlation_id  # сквозная трасса (NFR-13)
         return headers
@@ -61,8 +63,9 @@ class HttpKbSupportClient:
         return await self._post(
             f"{_SUPPORT_BASE}/from-chat",
             operation="create_issue",
+            on_behalf_of=None,
+            correlation_id=correlation_id,
             json=body,
-            headers=await self._headers(on_behalf_of=None, correlation_id=correlation_id),
         )
 
     async def add_message(
@@ -79,8 +82,9 @@ class HttpKbSupportClient:
         return await self._post(
             f"{_SUPPORT_BASE}/{ticket_id}/messages",
             operation="add_message",
+            on_behalf_of=on_behalf_of,
+            correlation_id=correlation_id,
             json=body,
-            headers=await self._headers(on_behalf_of=on_behalf_of, correlation_id=correlation_id),
         )
 
     async def get_status(
@@ -90,19 +94,34 @@ class HttpKbSupportClient:
         on_behalf_of: str | None = None,
         correlation_id: str | None = None,
     ) -> TicketRef:
-        headers = await self._headers(on_behalf_of=on_behalf_of, correlation_id=correlation_id)
         try:
+            headers = await self._headers(on_behalf_of=on_behalf_of, correlation_id=correlation_id)
             response = await self._http.request(
                 "GET", f"{_SUPPORT_BASE}/{ticket_id}", operation="get_status", headers=headers
             )
         except ExternalServiceError:
+            # Недоступность соседа ИЛИ сбой получения делегир. токена → деградация (G6).
             return TicketRef(unavailable=True)
         if response.status_code >= 400:
             return TicketRef(unavailable=True)
         return _to_ref(response.json())
 
-    async def _post(self, path: str, *, operation: str, **kwargs: Any) -> TicketRef:
+    async def _post(
+        self,
+        path: str,
+        *,
+        operation: str,
+        on_behalf_of: str | None,
+        correlation_id: str | None,
+        json: dict[str, Any] | None = None,
+    ) -> TicketRef:
         try:
+            # Заголовки (вкл. получение токена) — ВНУТРИ try: сбой token-exchange
+            # деградирует в unavailable, а не валит ход (CC-1).
+            headers = await self._headers(on_behalf_of=on_behalf_of, correlation_id=correlation_id)
+            kwargs: dict[str, Any] = {"headers": headers}
+            if json is not None:
+                kwargs["json"] = json
             response = await self._http.request("POST", path, operation=operation, **kwargs)
         except ExternalServiceError:
             return TicketRef(unavailable=True)
@@ -120,13 +139,6 @@ class HttpKbSupportClient:
         correlation_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> TicketRef:
-        headers = {"Authorization": f"Bearer {await self._token.get_token()}"}
-        if on_behalf_of is not None:
-            headers["X-On-Behalf-Of"] = on_behalf_of  # делегирование прав пользователя (G7)
-        if correlation_id is not None:
-            headers["X-Correlation-Id"] = correlation_id  # сквозная трасса (NFR-13)
-        if idempotency_key is not None:
-            headers["Idempotency-Key"] = idempotency_key  # анти-дубль тикета (§10)
         body = {
             "source": "concierge",
             "reason": reason,
@@ -134,6 +146,11 @@ class HttpKbSupportClient:
             "session_ref": session_ref,
         }
         try:
+            # Заголовки (вкл. получение токена) — ВНУТРИ try: сбой token-exchange
+            # деградирует в unavailable (G6). Делегирование — в токене, не заголовком (CC-1).
+            headers = await self._headers(on_behalf_of=on_behalf_of, correlation_id=correlation_id)
+            if idempotency_key is not None:
+                headers["Idempotency-Key"] = idempotency_key  # анти-дубль тикета (§10)
             response = await self._http.request(
                 "POST", _TICKETS_PATH, operation="create_ticket", json=body, headers=headers
             )

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import httpx
 
-from api.clients.auth import StaticTokenProvider
+from api.clients.auth import StaticTokenProvider, TokenProvider
 from api.clients.base import ResilientHttpClient
 from api.clients.circuit_breaker import CircuitBreaker
+from api.clients.errors import ExternalServiceError
 from api.clients.retry import RetryPolicy
 from api.clients.support.adapter import HttpKbSupportClient
 
@@ -15,7 +16,36 @@ async def _nosleep(_: float) -> None:
     return None
 
 
-def _client(handler: httpx.MockTransport) -> tuple[HttpKbSupportClient, httpx.AsyncClient]:
+class _DelegatingToken:
+    """Фейк: разный токен с/без делегирования (проверка CC-1 — делегирование в токене)."""
+
+    async def get_token(self, on_behalf_of: str | None = None) -> str:
+        return f"delegated:{on_behalf_of}" if on_behalf_of is not None else "m2m"
+
+
+class _FailingToken:
+    """Фейк: получение токена падает (Keycloak/обмен недоступны) — проверка деградации G6."""
+
+    async def get_token(self, on_behalf_of: str | None = None) -> str:
+        raise ExternalServiceError("keycloak", "token", "down")
+
+
+async def test_create_ticket_degrades_when_token_fails() -> None:
+    # CC-1/G6: сбой получения делегир. токена → unavailable (путь create_ticket, свой try).
+    client, http = _client(
+        httpx.MockTransport(lambda r: httpx.Response(201, json={"id": "T-1"})),
+        token_provider=_FailingToken(),
+    )
+    async with http:
+        ref = await client.create_ticket(
+            reason="r", context_masked="x", session_ref="s", on_behalf_of="u-1"
+        )
+    assert ref.unavailable is True
+
+
+def _client(
+    handler: httpx.MockTransport, token_provider: TokenProvider | None = None
+) -> tuple[HttpKbSupportClient, httpx.AsyncClient]:
     http = httpx.AsyncClient(transport=handler, base_url="http://kb-support")
     resilient = ResilientHttpClient(
         client_name="kb_support",
@@ -25,7 +55,9 @@ def _client(handler: httpx.MockTransport) -> tuple[HttpKbSupportClient, httpx.As
         sleep=_nosleep,
         monotonic=lambda: 0.0,
     )
-    return HttpKbSupportClient(http_client=resilient, token_provider=StaticTokenProvider("t")), http
+    return HttpKbSupportClient(
+        http_client=resilient, token_provider=token_provider or StaticTokenProvider("t")
+    ), http
 
 
 async def test_create_ticket_maps_id() -> None:
@@ -49,7 +81,7 @@ async def test_create_ticket_sends_delegation_idempotency_and_correlation() -> N
         body.update(json.loads(request.content))
         return httpx.Response(201, json={"ticket_id": "T-1"})
 
-    client, http = _client(httpx.MockTransport(handler))
+    client, http = _client(httpx.MockTransport(handler), token_provider=_DelegatingToken())
     async with http:
         ref = await client.create_ticket(
             reason="USER_REQUESTED",
@@ -60,7 +92,9 @@ async def test_create_ticket_sends_delegation_idempotency_and_correlation() -> N
             idempotency_key="idem-5",
         )
     assert ref.ticket_id == "T-1"
-    assert seen.get("x-on-behalf-of") == "user-42"  # G7
+    # CC-1: делегирование — в токене (token-exchange), не заголовком X-On-Behalf-Of.
+    assert seen.get("authorization") == "Bearer delegated:user-42"  # делегированный токен (G7)
+    assert "x-on-behalf-of" not in seen  # мёртвый заголовок убран
     assert seen.get("x-correlation-id") == "corr-9"  # NFR-13
     assert seen.get("idempotency-key") == "idem-5"  # §10 анти-дубль
     assert body["context"] == "x"

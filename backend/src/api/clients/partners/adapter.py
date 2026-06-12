@@ -31,9 +31,11 @@ class HttpKbPartnersClient:
     async def _headers(
         self, *, on_behalf_of: str | None, correlation_id: str | None
     ) -> dict[str, str]:
-        headers = {"Authorization": f"Bearer {await self._token.get_token()}"}
-        if on_behalf_of is not None:
-            headers["X-On-Behalf-Of"] = on_behalf_of  # делегирование прав (G7)
+        # Делегирование прав — в самом токене (token-exchange), НЕ заголовком
+        # X-On-Behalf-Of (kb-partners читает on-behalf-of из claim'а; CC-1/ADR-0004).
+        headers = {
+            "Authorization": f"Bearer {await self._token.get_token(on_behalf_of=on_behalf_of)}"
+        }
         if correlation_id is not None:
             headers["X-Correlation-Id"] = correlation_id  # сквозная трасса (NFR-13)
         return headers
@@ -61,8 +63,9 @@ class HttpKbPartnersClient:
         return await self._post(
             f"{_REQUESTS}/from-chat",
             operation="create_from_chat",
+            on_behalf_of=None,
+            correlation_id=correlation_id,
             json=body,
-            headers=await self._headers(on_behalf_of=None, correlation_id=correlation_id),
         )
 
     async def classify(
@@ -75,7 +78,8 @@ class HttpKbPartnersClient:
         return await self._post(
             f"{_REQUESTS}/{request_id}/classify",
             operation="classify",
-            headers=await self._headers(on_behalf_of=on_behalf_of, correlation_id=correlation_id),
+            on_behalf_of=on_behalf_of,
+            correlation_id=correlation_id,
         )
 
     async def dispatch(
@@ -88,7 +92,8 @@ class HttpKbPartnersClient:
         return await self._post(
             f"{_REQUESTS}/{request_id}/dispatch",
             operation="dispatch",
-            headers=await self._headers(on_behalf_of=on_behalf_of, correlation_id=correlation_id),
+            on_behalf_of=on_behalf_of,
+            correlation_id=correlation_id,
         )
 
     async def get_status(
@@ -98,19 +103,34 @@ class HttpKbPartnersClient:
         on_behalf_of: str | None = None,
         correlation_id: str | None = None,
     ) -> PartnerRequestRef:
-        headers = await self._headers(on_behalf_of=on_behalf_of, correlation_id=correlation_id)
         try:
+            headers = await self._headers(on_behalf_of=on_behalf_of, correlation_id=correlation_id)
             response = await self._http.request(
                 "GET", f"{_REQUESTS}/{request_id}", operation="get_status", headers=headers
             )
         except ExternalServiceError:
+            # Недоступность соседа ИЛИ сбой получения делегир. токена → деградация (G6).
             return PartnerRequestRef(unavailable=True)
         if response.status_code >= 400:
             return PartnerRequestRef(unavailable=True)
         return _to_ref(response.json())
 
-    async def _post(self, path: str, *, operation: str, **kwargs: Any) -> PartnerRequestRef:
+    async def _post(
+        self,
+        path: str,
+        *,
+        operation: str,
+        on_behalf_of: str | None,
+        correlation_id: str | None,
+        json: dict[str, Any] | None = None,
+    ) -> PartnerRequestRef:
         try:
+            # Заголовки (вкл. получение токена) — ВНУТРИ try: сбой token-exchange
+            # деградирует в unavailable, а не валит ход (CC-1).
+            headers = await self._headers(on_behalf_of=on_behalf_of, correlation_id=correlation_id)
+            kwargs: dict[str, Any] = {"headers": headers}
+            if json is not None:
+                kwargs["json"] = json
             response = await self._http.request("POST", path, operation=operation, **kwargs)
         except ExternalServiceError:
             return PartnerRequestRef(unavailable=True)
