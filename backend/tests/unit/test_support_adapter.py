@@ -87,3 +87,60 @@ async def test_create_ticket_degrades_on_missing_id() -> None:
     async with http:
         ref = await client.create_ticket(reason="r", context_masked="x", session_ref="s")
     assert ref.unavailable is True
+
+
+# --- M7.2: write-инструменты на реальных путях /api/v1/support/tickets ---
+
+
+async def test_create_issue_from_chat_uses_support_path_and_card() -> None:
+    seen_path: list[str] = []
+    body: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        seen_path.append(request.url.path)
+        body.update(json.loads(request.content))
+        return httpx.Response(201, json={"id": "T-1", "number": "S-100", "status": "NEW"})
+
+    client, http = _client(httpx.MockTransport(handler))
+    async with http:
+        ref = await client.create_issue_from_chat(
+            chat_session_id="s-1", requester_id="u-1", subject_masked="не работает домофон ***"
+        )
+    assert seen_path == ["/api/v1/support/tickets/from-chat"]
+    assert body["chat_session_id"] == "s-1"  # идемпотентность (FR-6.4)
+    assert (ref.ticket_id, ref.number, ref.status) == ("T-1", "S-100", "NEW")
+
+
+async def test_add_message_is_always_external() -> None:
+    body: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        body.update(json.loads(request.content))
+        return httpx.Response(201, json={"id": "T-1", "status": "OPEN"})
+
+    client, http = _client(httpx.MockTransport(handler))
+    async with http:
+        await client.add_message(ticket_id="T-1", body_masked="ответ ***")
+    # Инвариант «внутреннее ≠ внешнее»: агент НИКОГДА не пишет внутренних заметок.
+    assert body["is_internal"] is False
+    assert body["body"] == "ответ ***"
+
+
+async def test_get_status_reads_card() -> None:
+    client, http = _client(
+        httpx.MockTransport(lambda r: httpx.Response(200, json={"id": "T-1", "status": "RESOLVED"}))
+    )
+    async with http:
+        ref = await client.get_status(ticket_id="T-1")
+    assert ref.status == "RESOLVED"
+
+
+async def test_support_write_degrades_on_error() -> None:
+    client, http = _client(httpx.MockTransport(lambda r: httpx.Response(503)))
+    async with http:
+        assert (await client.add_message(ticket_id="T", body_masked="x")).unavailable is True
+        assert (await client.get_status(ticket_id="T")).unavailable is True

@@ -25,3 +25,29 @@ class KbSupportClient(Protocol):
         correlation_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> TicketRef: ...
+
+    async def create_issue_from_chat(
+        self,
+        *,
+        chat_session_id: str,
+        requester_id: str,
+        subject_masked: str,
+        correlation_id: str | None = None,
+    ) -> TicketRef: ...
+
+    async def add_message(
+        self,
+        *,
+        ticket_id: str,
+        body_masked: str,
+        on_behalf_of: str | None = None,
+        correlation_id: str | None = None,
+    ) -> TicketRef: ...
+
+    async def get_status(
+        self,
+        *,
+        ticket_id: str,
+        on_behalf_of: str | None = None,
+        correlation_id: str | None = None,
+    ) -> TicketRef: ...

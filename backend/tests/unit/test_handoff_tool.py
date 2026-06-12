@@ -37,6 +37,15 @@ class _FakeSupportClient:
         )
         return self._ref
 
+    async def create_issue_from_chat(self, **kwargs: object) -> TicketRef:
+        return self._ref
+
+    async def add_message(self, **kwargs: object) -> TicketRef:
+        return self._ref
+
+    async def get_status(self, **kwargs: object) -> TicketRef:
+        return self._ref
+
 
 def _registry(tool: HandoffToOperatorTool) -> ToolRegistry:
     reg = ToolRegistry()
