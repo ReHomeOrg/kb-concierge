@@ -110,6 +110,10 @@ class Settings(BaseSettings):
     kb_search_api_token: str = Field(default="", description="Fallback-токен kb-search (dev).")
     platform_api_base_url: str = Field(default="", description="Base URL rehome.one (контекст).")
     platform_api_token: str = Field(default="", description="Fallback-токен rehome.one (dev).")
+    kb_support_api_base_url: str = Field(
+        default="", description="Base URL kb-support (эскалация/тикеты)."
+    )
+    kb_support_api_token: str = Field(default="", description="Fallback-токен kb-support (dev).")
 
     # --- Dramatiq-воркер (durable исходящие события, фоновые задачи). ПУСТОЙ
     # broker_url → StubBroker, акторы инертны (broker/worker поднимает ops). ---
