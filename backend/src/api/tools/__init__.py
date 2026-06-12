@@ -8,12 +8,15 @@ guardrails — Policy Engine (M4). Write-инструменты (support.*/partn
 from __future__ import annotations
 
 from api.tools.base import Tool, ToolContext, ToolResult
+from api.tools.platform import PlatformContextInput, PlatformGetContextTool
 from api.tools.registry import ToolNotFoundError, ToolRegistry
 from api.tools.search import KbSearchInput, KbSearchTool
 
 __all__ = [
     "KbSearchInput",
     "KbSearchTool",
+    "PlatformContextInput",
+    "PlatformGetContextTool",
     "Tool",
     "ToolContext",
     "ToolNotFoundError",
