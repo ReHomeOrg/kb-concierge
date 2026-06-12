@@ -5,6 +5,11 @@
 #
 # Порт хоста 5435 (а не 5432/5433) — чтобы не конфликтовать с уже запущенными
 # на машине Postgres'ами rehome-kb-platform (5432) и kb-support test pg (5433).
+#
+# `name:` фиксирует имя compose-проекта. Без него проект = имя папки (`backend`),
+# которое совпадает с kb-partners/backend → docker compose считал их одним проектом
+# и пересоздавал чужой postgres-контейнер. Явное имя изолирует стеки.
+name: kb-concierge
 
 services:
   postgres:
