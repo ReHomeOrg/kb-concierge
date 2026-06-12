@@ -16,6 +16,7 @@ import httpx
 
 from api.clients.auth import build_token_provider
 from api.clients.cache import InMemoryCache
+from api.clients.chat.adapter import HttpKbChatClient
 from api.clients.factory import build_resilient_client
 from api.clients.partners.adapter import HttpKbPartnersClient
 from api.clients.platform.adapter import HttpPlatformClient
@@ -24,6 +25,7 @@ from api.clients.support.adapter import HttpKbSupportClient
 from api.config import Settings, get_settings
 from api.reasoning.limits import Limits
 from api.reasoning.loop import ReasoningLoop
+from api.tools.chat_answer import KbAnswerTool
 from api.tools.partners import (
     PartnersClassifyTool,
     PartnersCreateRequestTool,
@@ -67,6 +69,18 @@ async def get_reasoning_loop() -> AsyncIterator[ReasoningLoop]:
                     )
                 )
             )
+            # K-4 #15: RAG-ответ (chat-роут) — тот же сервис kb-search, config-gated.
+            if settings.kb_rag_answer_enabled:
+                registry.register(
+                    KbAnswerTool(
+                        HttpKbChatClient(
+                            http_client=build_resilient_client("kb_chat", http, settings),
+                            token_provider=build_token_provider(
+                                settings, fallback_token=settings.kb_search_api_token
+                            ),
+                        )
+                    )
+                )
         if settings.platform_api_base_url:
             phttp = await stack.enter_async_context(
                 httpx.AsyncClient(
@@ -89,7 +103,9 @@ async def get_reasoning_loop() -> AsyncIterator[ReasoningLoop]:
             await _register_support_tools(stack, registry, settings)
         if settings.kb_partners_api_base_url:
             await _register_partners_tools(stack, registry, settings)
-        yield ReasoningLoop(registry, Limits.from_settings(settings))
+        yield ReasoningLoop(
+            registry, Limits.from_settings(settings), rag_answer=settings.kb_rag_answer_enabled
+        )
 
 
 async def _register_support_tools(
