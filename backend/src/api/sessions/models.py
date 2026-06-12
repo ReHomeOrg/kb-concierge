@@ -70,6 +70,11 @@ class AgentSession(Base, TimestampMixin):
     # Сжатая память диалога (только маскированная, G3). Заполняется с M5.
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Отложенное действие, ждущее явного подтверждения пользователя (FR-7.4, M7):
+    # {tools, intent, query_masked, policy_version, reason}. Только маскированный
+    # query (G3). NULL → нет ожидающего подтверждения.
+    pending_action: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
     # Сквозной correlation_id создающего запроса (NFR-13 трассировка).
     correlation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 

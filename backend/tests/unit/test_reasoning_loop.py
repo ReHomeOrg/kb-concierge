@@ -151,7 +151,89 @@ async def test_tool_call_requires_confirmation_reply() -> None:
         decision=decision, intent=Intent.PARTNER_SERVICE, query_masked="уборка", context=_CTX
     )
     assert "подтверд" in out.reply.lower()
-    assert out.tool_calls == 0  # write-инструменты не исполняются в M5 (M7)
+    assert out.awaiting_confirmation is True  # FR-7.4: не исполнено без согласия
+    assert out.action_taken is False
+    assert out.tool_calls == 0
+
+
+class _NamedTool:
+    def __init__(self, name: str, result: ToolResult) -> None:
+        self.name = name
+        self.description = "fake"
+        self._result = result
+        self.calls = 0
+
+    async def run(self, payload: Mapping[str, Any], context: ToolContext) -> ToolResult:
+        self.calls += 1
+        return self._result
+
+
+def _partner_decision() -> PolicyDecision:
+    return PolicyDecision(
+        AgentActionKind.TOOL_CALL,
+        DecisionReason.PAID_NEEDS_CONFIRMATION,
+        "1.0",
+        allowed_tools=("partners.create_request", "partners.classify"),
+        requires_confirmation=True,
+    )
+
+
+async def test_confirmed_partner_service_executes_create_and_classify() -> None:
+    create = _NamedTool(
+        "partners.create_request", ToolResult(data={"request_id": "r-1", "number": "P-9"})
+    )
+    classify = _NamedTool(
+        "partners.classify", ToolResult(data={"number": "P-9", "category": "CLEANING"})
+    )
+    reg = ToolRegistry()
+    reg.register(create)
+    reg.register(classify)
+    out = await _loop_with(reg).run(
+        decision=_partner_decision(),
+        intent=Intent.PARTNER_SERVICE,
+        query_masked="уборка",
+        context=_CTX,
+        confirmed=True,
+    )
+    assert create.calls == 1 and classify.calls == 1
+    assert out.action_taken is True
+    assert "P-9" in out.reply
+
+
+async def test_confirmed_partner_service_degrades_when_create_unavailable() -> None:
+    create = _NamedTool("partners.create_request", ToolResult(unavailable=True))
+    reg = ToolRegistry()
+    reg.register(create)
+    out = await _loop_with(reg).run(
+        decision=_partner_decision(),
+        intent=Intent.PARTNER_SERVICE,
+        query_masked="уборка",
+        context=_CTX,
+        confirmed=True,
+    )
+    assert out.degraded is True
+    assert out.action_taken is False
+
+
+async def test_support_issue_executes_without_confirmation() -> None:
+    create = _NamedTool(
+        "support.create_ticket", ToolResult(data={"ticket_id": "T-1", "number": "S-2"})
+    )
+    reg = ToolRegistry()
+    reg.register(create)
+    decision = PolicyDecision(
+        AgentActionKind.TOOL_CALL,
+        DecisionReason.AUTONOMOUS_OK,
+        "1.0",
+        allowed_tools=("support.create_ticket",),
+    )
+    out = await _loop_with(reg).run(
+        decision=decision, intent=Intent.SUPPORT_ISSUE, query_masked="не приехал", context=_CTX
+    )
+    assert create.calls == 1
+    assert out.action_taken is True
+    assert "S-2" in out.reply
+    assert out.tool_calls == 1  # write-инструмент исполнен под политикой (M7)
 
 
 async def test_small_talk_reply() -> None:
