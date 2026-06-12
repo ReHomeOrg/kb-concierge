@@ -163,9 +163,14 @@ class HttpKbSupportClient:
 
 
 def _to_ref(payload: Any) -> TicketRef:
-    """Маппинг провизорного контракта kb-support → доменный DTO (без ПДн)."""
+    """Маппинг контракта kb-support → доменный DTO (без ПДн)."""
     if not isinstance(payload, dict):
         return TicketRef(unavailable=True)
+    # S-1 (Э0): kb-support заворачивает ответы в ResponseEnvelope {data, request_id} —
+    # полезная нагрузка лежит в `data`. Дефенсивно: без конверта читаем верхний уровень.
+    data = payload.get("data")
+    if isinstance(data, dict):
+        payload = data
     ticket_id = payload.get("id") or payload.get("ticket_id")
     if ticket_id is None:
         return TicketRef(unavailable=True)

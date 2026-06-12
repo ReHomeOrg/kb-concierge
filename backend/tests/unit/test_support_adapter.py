@@ -70,6 +70,19 @@ async def test_create_ticket_maps_id() -> None:
     assert ref.ticket_id == "T-77"
 
 
+async def test_unwraps_response_envelope() -> None:
+    # S-1 (Э0): реальные ответы kb-support завёрнуты в ResponseEnvelope {data, request_id};
+    # _to_ref должен читать ticket из data, иначе ticket_id всегда None (ложная деградация).
+    enveloped = {"data": {"id": "T-9", "number": "S-9", "status": "NEW"}, "request_id": "req-1"}
+    client, http = _client(httpx.MockTransport(lambda r: httpx.Response(201, json=enveloped)))
+    async with http:
+        ref = await client.create_issue_from_chat(
+            chat_session_id="s-1", requester_id="u-1", subject_masked="не работает домофон ***"
+        )
+    assert ref.unavailable is False
+    assert (ref.ticket_id, ref.number, ref.status) == ("T-9", "S-9", "NEW")
+
+
 async def test_create_ticket_sends_delegation_idempotency_and_correlation() -> None:
     seen: dict[str, str] = {}
     body: dict[str, object] = {}
