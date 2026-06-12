@@ -34,7 +34,7 @@ class _FailingToken:
 async def test_search_degrades_when_token_fails() -> None:
     # CC-1/G6: сбой получения делегир. токена → unavailable, ход не падает.
     client, http = _client(
-        httpx.MockTransport(lambda r: httpx.Response(200, json={"results": []})),
+        httpx.MockTransport(lambda r: httpx.Response(200, json={"data": []})),
         token_provider=_FailingToken(),
     )
     async with http:
@@ -59,21 +59,52 @@ def _client(
     ), http
 
 
-async def test_search_maps_citations() -> None:
-    payload = {
-        "answer": "Договор продлевается за 30 дней.",
-        "results": [
-            {"id": "kb-1", "title": "Аренда", "snippet": "...", "url": "https://kb/1"},
-            {"id": "kb-2", "title": "Продление", "snippet": "..."},
-        ],
-    }
-    client, http = _client(httpx.MockTransport(lambda r: httpx.Response(200, json=payload)))
+async def test_search_posts_query_and_maps_data() -> None:
+    # K-1/K-2/K-3 (Э0): POST /api/v1/search с телом {query, limit}; ответ — в ключе `data`.
+    seen = {"method": "", "path": "", "body": {}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["body"] = _json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "kb-1", "title": "Аренда", "snippet": "...", "url": "/articles/a1"},
+                    {"id": "kb-2", "title": "Продление", "snippet": None},  # K-5: snippet null
+                ]
+            },
+        )
+
+    client, http = _client(httpx.MockTransport(handler))
     async with http:
-        result = await client.search(query_masked="как продлить договор")
+        result = await client.search(query_masked="как продлить договор", limit=5)
+    assert seen["method"] == "POST"  # K-1
+    assert seen["path"] == "/api/v1/search"
+    assert seen["body"] == {"query": "как продлить договор", "limit": 5}  # K-2
     assert result.unavailable is False
-    assert result.answer is not None
-    assert [c.source_id for c in result.citations] == ["kb-1", "kb-2"]
-    assert result.citations[0].url == "https://kb/1"
+    assert [c.source_id for c in result.citations] == ["kb-1", "kb-2"]  # K-3
+    assert result.citations[0].url == "/articles/a1"
+    assert result.citations[1].snippet == ""  # K-5: null snippet → пустая строка, не "None"
+
+
+async def test_search_caps_query_to_500() -> None:
+    # query ≤ 500 (контракт соседа) — режем во избежание 422.
+    body = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        body.update(_json.loads(request.content))
+        return httpx.Response(200, json={"data": []})
+
+    client, http = _client(httpx.MockTransport(handler))
+    async with http:
+        await client.search(query_masked="д" * 600)
+    assert len(body["query"]) == 500
 
 
 async def test_search_delegates_via_token_not_header() -> None:
@@ -83,7 +114,7 @@ async def test_search_delegates_via_token_not_header() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.update(request.headers)
-        return httpx.Response(200, json={"results": []})
+        return httpx.Response(200, json={"data": []})
 
     client, http = _client(httpx.MockTransport(handler), token_provider=_DelegatingToken())
     async with http:

@@ -39,9 +39,10 @@ class KbSearchTool:
         result = await self._client.search(
             query_masked=params.query, limit=params.limit, on_behalf_of=context.on_behalf_of
         )
+        # K-4: kb.search отдаёт только цитаты (retrieval); RAG-ответ — отдельный
+        # инструмент поверх chat-роута (issue #15).
         data: dict[str, Any] = {
             "query": result.query,
-            "answer": result.answer,
             "citations": [asdict(c) for c in result.citations],
         }
         return ToolResult(data=data, unavailable=result.unavailable)

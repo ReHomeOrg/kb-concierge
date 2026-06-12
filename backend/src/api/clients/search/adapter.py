@@ -46,10 +46,13 @@ class HttpKbSearchClient:
             headers = {
                 "Authorization": f"Bearer {await self._token.get_token(on_behalf_of=on_behalf_of)}"
             }
-            payload = await self._http.get_json(
+            # K-1/K-2 (Э0): kb-search — POST /api/v1/search с телом SearchInput
+            # {query, limit} (НЕ GET ?q=). query ≤ 500 (контракт соседа) — режем во
+            # избежание 422; маскированный текст (G3).
+            payload = await self._http.post_json(
                 _SEARCH_PATH,
                 operation="search",
-                params={"q": query_masked, "limit": limit},
+                json={"query": query_masked[:500], "limit": limit},
                 headers=headers,
                 cache=self._cache,
                 cache_key=f"search:{on_behalf_of or '-'}:{limit}:{query_masked}",
@@ -61,19 +64,22 @@ class HttpKbSearchClient:
 
 
 def _to_result(query: str, payload: Any) -> SearchResult:
-    """Маппинг провизорного контракта kb-search → доменный DTO."""
+    """Маппинг контракта kb-search (SearchResponse) → доменный DTO.
+
+    K-3 (Э0): результаты — в ключе `data` (SearchHit[]), НЕ `results`. K-4: `kb.search` —
+    только retrieval-цитаты; RAG-синтез (`answer`) — отдельный инструмент поверх chat-роута.
+    """
     if not isinstance(payload, dict):
         return SearchResult(query=query)
-    items = payload.get("results") or []
+    items = payload.get("data") or []
     citations = [
         Citation(
             source_id=str(item.get("id", "")),
             title=str(item.get("title", "")),
-            snippet=str(item.get("snippet", "")),
+            snippet=str(item.get("snippet") or ""),  # K-5: snippet может быть null
             url=item.get("url"),
         )
         for item in items
         if isinstance(item, dict)
     ]
-    answer = payload.get("answer")
-    return SearchResult(query=query, citations=citations, answer=answer)
+    return SearchResult(query=query, citations=citations)

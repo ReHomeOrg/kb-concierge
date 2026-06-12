@@ -177,6 +177,26 @@ async def test_get_json_cache_aside() -> None:
     assert calls["n"] == 1  # второй вызов из кеша, без сети
 
 
+async def test_post_json_cache_aside() -> None:
+    calls = {"n": 0}
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, json={"v": calls["n"]})
+
+    client, http = _resilient(httpx.MockTransport(handler))
+    cache = InMemoryCache(now=lambda: 0.0)
+    async with http:
+        a = await client.post_json(
+            "/x", operation="op", json={"q": "x"}, cache=cache, cache_key="k", cache_ttl_seconds=60
+        )
+        b = await client.post_json(
+            "/x", operation="op", json={"q": "x"}, cache=cache, cache_key="k", cache_ttl_seconds=60
+        )
+    assert a == b == {"v": 1}
+    assert calls["n"] == 1  # второй вызов из кеша, без сети (идемпотентный POST-поиск)
+
+
 # --- token provider ------------------------------------------------------
 
 
