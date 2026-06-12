@@ -154,3 +154,25 @@ async def test_answer_degrades_when_token_fails() -> None:
     async with http:
         result = await client.answer(query_masked="q", on_behalf_of="u-1")
     assert result.unavailable is True
+
+
+async def test_answer_degrades_on_session_4xx() -> None:
+    # 4xx сессии (напр. 403) — passthrough без ретрая → деградация (не падение).
+    transport, _ = _two_step({"content": "x"}, session_status=403)
+    client, http = _client(transport)
+    async with http:
+        result = await client.answer(query_masked="q", on_behalf_of="u-1")
+    assert result.unavailable is True
+
+
+async def test_answer_degrades_on_non_dict_message_payload() -> None:
+    # Битый ответ сообщения (не-объект) → unavailable, не исключение наружу.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/chat/sessions":
+            return httpx.Response(201, json={"id": "s-1"})
+        return httpx.Response(200, json=["unexpected", "list"])
+
+    client, http = _client(httpx.MockTransport(handler))
+    async with http:
+        result = await client.answer(query_masked="q", on_behalf_of="u-1")
+    assert result.unavailable is True
