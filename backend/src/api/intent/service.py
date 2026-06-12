@@ -10,23 +10,26 @@ from __future__ import annotations
 from api.config import Settings
 from api.intent.engine import IntentClassifier, IntentOutcome
 from api.intent.provider import NullLLMProvider
+from api.intent.yandexgpt import build_llm_provider
 from api.observability.logging import get_logger
 
 _logger = get_logger("intent")
 
 
 def build_intent_classifier(settings: Settings) -> IntentClassifier:
-    """Собрать классификатор по конфигурации. `null` → инертный rules-путь.
+    """Собрать классификатор по конфигурации. `null`/пустые креды → инертный rules-путь.
 
-    Боевые провайдеры (yandexgpt) подключают внешний SDK и требуют ADR-0003 —
-    до его реализации выбор боевого провайдера деградирует в Null (не падаем).
+    Боевой провайдер `yandexgpt` (ADR-0003) включается только при заполненных
+    api_key/folder_id; иначе выбор деградирует в `NullLLMProvider` (fail-safe, FR-6.6 —
+    не падаем). Выбор имени без реализации (gigachat/vllm) логируется и резолвится в Null.
     """
     name = settings.intent_llm_provider.strip().lower()
-    if name != "null":
-        _logger.warning(
-            "intent_llm_provider=%s ещё не реализован (ADR-0003 pending) → NullLLMProvider", name
-        )
-    return IntentClassifier(NullLLMProvider())
+    provider = build_llm_provider(settings)
+    if name not in ("null", "yandexgpt"):
+        _logger.warning("intent_llm_provider=%s ещё не реализован → NullLLMProvider", name)
+    elif name == "yandexgpt" and isinstance(provider, NullLLMProvider):
+        _logger.warning("intent_llm_provider=yandexgpt без кредов → NullLLMProvider (rules-only)")
+    return IntentClassifier(provider)
 
 
 class IntentService:
