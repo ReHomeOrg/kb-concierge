@@ -35,6 +35,7 @@ from api.sessions.enums import AuditAction, SessionStatus, TurnRole
 from api.sessions.models import AgentSession, AgentTurn
 from api.sessions.repository import SessionRepository
 from api.tools.base import ToolContext
+from api.webhooks import events
 
 # Ответ хода при деградации распознавания (намерение не определено, FR-6.6).
 _DEGRADED_REPLY = "Принял ваше сообщение, обрабатываю запрос."
@@ -251,6 +252,18 @@ class SessionService:
         await self._repo.commit()
         return agent_turn
 
+    def _emit_action_event(
+        self, session: AgentSession, intent: str, kind: str, correlation_id: str | None
+    ) -> None:
+        """Опубликовать webhook итога хода (§10), если есть соответствующее событие."""
+        event_type = events.event_for_action_kind(kind)
+        if event_type is not None:
+            self._repo.add_outbox_event(
+                event_type,
+                events.action_payload(session_id=session.id, intent=intent, kind=kind),
+                correlation_id,
+            )
+
     async def _route_new(
         self,
         session: AgentSession,
@@ -294,7 +307,24 @@ class SessionService:
         # Наблюдаемость решений агента (§11, M8): низкокардинальные enum-лейблы.
         record_intent(outcome.intent.value, outcome.method)
         record_policy(decision.outcome.value, decision.reason.value)
-        record_action(_action_kind(loop_result, decision.outcome))
+        kind = _action_kind(loop_result, decision.outcome)
+        record_action(kind)
+
+        # Исходящие webhooks (§10, M8): факт без содержимого диалога (G3). handoff_created
+        # публикует HandoffService. Только при сконфигурированном подписчике.
+        if self._settings.webhook_subscriber_url:
+            corr = tool_context.correlation_id
+            self._repo.add_outbox_event(
+                events.INTENT_CLASSIFIED,
+                events.intent_payload(
+                    session_id=session.id,
+                    intent=outcome.intent.value,
+                    confidence=outcome.confidence,
+                    method=outcome.method,
+                ),
+                corr,
+            )
+            self._emit_action_event(session, outcome.intent.value, kind, corr)
 
         if loop_result.awaiting_confirmation:
             session.pending_action = {
@@ -349,7 +379,12 @@ class SessionService:
             trace["loop"] = loop_result.to_trace()
             user_turn.intent_trace = trace
             session.pending_action = None
-            record_action("action_taken" if loop_result.action_taken else "degraded")
+            kind = "action_taken" if loop_result.action_taken else "degraded"
+            record_action(kind)
+            if self._settings.webhook_subscriber_url:
+                self._emit_action_event(
+                    session, str(pending.get("intent")), kind, tool_context.correlation_id
+                )
             return loop_result.reply, loop_result
 
         user_turn.intent_trace = trace
