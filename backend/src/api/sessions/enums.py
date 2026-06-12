@@ -47,6 +47,7 @@ class AuditAction(str, enum.Enum):
     MESSAGE_RECEIVED = "MESSAGE_RECEIVED"
     INTENT_CLASSIFIED = "INTENT_CLASSIFIED"  # E5: распознано намерение хода (M2)
     POLICY_DECISION = "POLICY_DECISION"  # §7: решение политики автономности (M4)
+    TOOL_CALLED = "TOOL_CALLED"  # §6: вызов инструмента в ходе (M5, FR-6.3)
     AGENT_RESPONDED = "AGENT_RESPONDED"
     SESSION_FORGOTTEN = "SESSION_FORGOTTEN"
 
