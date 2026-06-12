@@ -6,7 +6,7 @@ import json
 
 import httpx
 
-from api.clients.auth import StaticTokenProvider
+from api.clients.auth import StaticTokenProvider, TokenProvider
 from api.clients.base import ResilientHttpClient
 from api.clients.circuit_breaker import CircuitBreaker
 from api.clients.partners.adapter import HttpKbPartnersClient
@@ -17,7 +17,16 @@ async def _nosleep(_: float) -> None:
     return None
 
 
-def _client(handler: httpx.MockTransport) -> tuple[HttpKbPartnersClient, httpx.AsyncClient]:
+class _DelegatingToken:
+    """Фейк: разный токен с/без делегирования (проверка CC-1 — делегирование в токене)."""
+
+    async def get_token(self, on_behalf_of: str | None = None) -> str:
+        return f"delegated:{on_behalf_of}" if on_behalf_of is not None else "m2m"
+
+
+def _client(
+    handler: httpx.MockTransport, token_provider: TokenProvider | None = None
+) -> tuple[HttpKbPartnersClient, httpx.AsyncClient]:
     http = httpx.AsyncClient(transport=handler, base_url="http://kb-partners")
     resilient = ResilientHttpClient(
         client_name="kb_partners",
@@ -28,7 +37,7 @@ def _client(handler: httpx.MockTransport) -> tuple[HttpKbPartnersClient, httpx.A
         monotonic=lambda: 0.0,
     )
     return HttpKbPartnersClient(
-        http_client=resilient, token_provider=StaticTokenProvider("t")
+        http_client=resilient, token_provider=token_provider or StaticTokenProvider("t")
     ), http
 
 
@@ -63,18 +72,20 @@ async def test_create_from_chat_maps_card_and_masks() -> None:
     assert seen.get("x-correlation-id") == "corr-1"
 
 
-async def test_classify_passes_delegation_header() -> None:
+async def test_classify_delegates_via_token_not_header() -> None:
+    # CC-1: делегирование — в токене (token-exchange), не заголовком X-On-Behalf-Of.
     seen: dict[str, str] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.update(request.headers)
         return httpx.Response(200, json={"id": "r-1", "status": "CLASSIFIED", "category": "REPAIR"})
 
-    client, http = _client(httpx.MockTransport(handler))
+    client, http = _client(httpx.MockTransport(handler), token_provider=_DelegatingToken())
     async with http:
         ref = await client.classify(request_id="r-1", on_behalf_of="u-9")
     assert ref.category == "REPAIR"
-    assert seen.get("x-on-behalf-of") == "u-9"  # делегирование прав (G7)
+    assert seen.get("authorization") == "Bearer delegated:u-9"  # делегированный токен (G7)
+    assert "x-on-behalf-of" not in seen  # мёртвый заголовок убран
 
 
 async def test_dispatch_maps_status() -> None:

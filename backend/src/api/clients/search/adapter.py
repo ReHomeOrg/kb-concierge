@@ -39,10 +39,13 @@ class HttpKbSearchClient:
     async def search(
         self, *, query_masked: str, limit: int = 5, on_behalf_of: str | None = None
     ) -> SearchResult:
-        headers = {"Authorization": f"Bearer {await self._token.get_token()}"}
-        if on_behalf_of is not None:
-            headers["X-On-Behalf-Of"] = on_behalf_of  # делегирование прав пользователя (G7)
         try:
+            # Делегирование прав — в самом токене (token-exchange), НЕ заголовком
+            # X-On-Behalf-Of (соседи его не читают; CC-1/ADR-0004). Сбой получения
+            # токена → ExternalServiceError → деградация ниже (G6, не падаем).
+            headers = {
+                "Authorization": f"Bearer {await self._token.get_token(on_behalf_of=on_behalf_of)}"
+            }
             payload = await self._http.get_json(
                 _SEARCH_PATH,
                 operation="search",

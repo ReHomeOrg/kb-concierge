@@ -34,10 +34,13 @@ class HttpPlatformClient:
         self._cache_ttl = cache_ttl_seconds
 
     async def get_context(self, *, user_id: str, on_behalf_of: str | None = None) -> UserContext:
-        headers = {"Authorization": f"Bearer {await self._token.get_token()}"}
-        if on_behalf_of is not None:
-            headers["X-On-Behalf-Of"] = on_behalf_of  # делегирование прав (G7)
         try:
+            # Делегирование прав — в самом токене (token-exchange), НЕ заголовком
+            # X-On-Behalf-Of (соседи его не читают; CC-1/ADR-0004). Сбой получения
+            # токена → ExternalServiceError → деградация ниже (G6, не падаем).
+            headers = {
+                "Authorization": f"Bearer {await self._token.get_token(on_behalf_of=on_behalf_of)}"
+            }
             payload = await self._http.get_json(
                 f"/api/v1/users/{user_id}/context",
                 operation="get_context",
