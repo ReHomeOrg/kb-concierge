@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from api.auth.token_context import get_user_access_token
+
 if TYPE_CHECKING:
     from api.clients.oauth import ClientCredentialsTokenProvider, TokenExchangeProvider
     from api.config import Settings
@@ -62,6 +64,31 @@ class OAuth2TokenProvider:
         if on_behalf_of is None:
             return m2m
         return await self._exchange.exchange(subject_token=m2m, requested_subject=on_behalf_of)
+
+
+class DelegatedUserTokenProvider:
+    """Passthrough делегирования для READ-ONLY вызовов от имени пользователя (G7).
+
+    Для вызова от имени пользователя (`on_behalf_of` задан) использует ВХОДЯЩИЙ
+    Bearer-токен пользователя из request-контекста — то есть downstream применяет
+    РОВНО права пользователя (не шире, G2/G7), без token-exchange. Если токена в
+    контексте нет (не пользовательский запрос) или делегирование не требуется
+    (`on_behalf_of is None`) — отдаёт токен базового провайдера (m2m/static).
+
+    Применяется ТОЛЬКО к read-only инструментам (kb.search/kb.answer): они не
+    выполняют необратимых действий, поэтому проброс пользовательского токена
+    безопасен. Write-инструменты (support/partners) используют базовый провайдер.
+    """
+
+    def __init__(self, base: TokenProvider) -> None:
+        self._base = base
+
+    async def get_token(self, on_behalf_of: str | None = None) -> str:
+        if on_behalf_of is not None:
+            user_token = get_user_access_token()
+            if user_token:
+                return user_token
+        return await self._base.get_token(on_behalf_of=on_behalf_of)
 
 
 def build_token_provider(settings: Settings, *, fallback_token: str = "") -> TokenProvider:
