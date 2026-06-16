@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from dataclasses import dataclass, field
 from typing import Any
 
 from api.auth.principal import Principal, PrincipalKind
@@ -42,6 +43,19 @@ _DEGRADED_REPLY = "Принял ваше сообщение, обрабатыв�
 # Ответы разрешения подтверждения (FR-7.4).
 _DECLINE_REPLY = "Хорошо, отменил. Если понадобится — обращайтесь."
 _REASK_REPLY = "Нужно ваше подтверждение: оформляем заявку? Ответьте «да» или «нет»."
+
+
+@dataclass
+class PostedTurn:
+    """Итог хода для ответа API: реплика агента + транзитные поля хода.
+
+    `citations`/`awaiting_confirmation` берутся из `LoopResult` и в БД не
+    персистятся — отдаются только в ответе текущего хода (источники-ссылки и
+    запрос подтверждения write-действия, FR-7.4)."""
+
+    turn: AgentTurn
+    citations: list[dict[str, Any]] = field(default_factory=list)
+    awaiting_confirmation: bool = False
 
 
 def _action_kind(loop_result: LoopResult, outcome: AgentActionKind) -> str:
@@ -148,7 +162,7 @@ class SessionService:
         correlation_id: str | None,
         reasoning_loop: ReasoningLoop,
         handoff_service: HandoffService,
-    ) -> AgentTurn:
+    ) -> PostedTurn:
         """Записать реплику, распознать намерение, решить политикой и ИСПОЛНИТЬ ход.
 
         ПДн маскируются (`content_masked`, G3); в классификатор/инструменты — только
@@ -250,7 +264,13 @@ class SessionService:
 
         await self._repo.flush_refresh(agent_turn)
         await self._repo.commit()
-        return agent_turn
+        return PostedTurn(
+            turn=agent_turn,
+            citations=loop_result.citations if loop_result is not None else [],
+            awaiting_confirmation=(
+                loop_result.awaiting_confirmation if loop_result is not None else False
+            ),
+        )
 
     def _emit_action_event(
         self, session: AgentSession, intent: str, kind: str, correlation_id: str | None
