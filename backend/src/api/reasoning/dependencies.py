@@ -14,7 +14,7 @@ from contextlib import AsyncExitStack
 
 import httpx
 
-from api.clients.auth import build_token_provider
+from api.clients.auth import DelegatedUserTokenProvider, build_token_provider
 from api.clients.cache import InMemoryCache
 from api.clients.chat.adapter import HttpKbChatClient
 from api.clients.factory import build_resilient_client
@@ -61,8 +61,10 @@ async def get_reasoning_loop() -> AsyncIterator[ReasoningLoop]:
                 KbSearchTool(
                     HttpKbSearchClient(
                         http_client=build_resilient_client("kb_search", http, settings),
-                        token_provider=build_token_provider(
-                            settings, fallback_token=settings.kb_search_api_token
+                        token_provider=DelegatedUserTokenProvider(
+                            build_token_provider(
+                                settings, fallback_token=settings.kb_search_api_token
+                            )
                         ),
                         cache=_TOOL_CACHE,
                         cache_ttl_seconds=settings.client_cache_ttl_seconds,
@@ -75,8 +77,10 @@ async def get_reasoning_loop() -> AsyncIterator[ReasoningLoop]:
                     KbAnswerTool(
                         HttpKbChatClient(
                             http_client=build_resilient_client("kb_chat", http, settings),
-                            token_provider=build_token_provider(
-                                settings, fallback_token=settings.kb_search_api_token
+                            token_provider=DelegatedUserTokenProvider(
+                                build_token_provider(
+                                    settings, fallback_token=settings.kb_search_api_token
+                                )
                             ),
                         )
                     )

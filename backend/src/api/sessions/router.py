@@ -23,7 +23,13 @@ from api.reasoning.dependencies import get_reasoning_loop
 from api.reasoning.loop import ReasoningLoop
 from api.sessions.dependencies import get_rate_limiter, get_session_service
 from api.sessions.ratelimit import RateLimiter
-from api.sessions.schemas import MessageCreate, SessionCreate, SessionRead, TurnRead
+from api.sessions.schemas import (
+    CitationOut,
+    MessageCreate,
+    SessionCreate,
+    SessionRead,
+    TurnRead,
+)
 from api.sessions.service import SessionService
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
@@ -77,10 +83,22 @@ async def post_message_endpoint(
     """Принять реплику и вернуть ответ агента. Лимит публичного входа (NFR-12) → 429."""
     if not limiter.allow(str(principal.effective_user_id)):
         raise ProblemException.too_many_requests(detail="Rate limit exceeded")
-    agent_turn = await service.post_message(
+    posted = await service.post_message(
         principal, session_id, payload.content, get_request_id(), reasoning_loop, handoff_service
     )
-    return TurnRead.from_orm_turn(agent_turn)
+    turn = TurnRead.from_orm_turn(posted.turn)
+    # Транзитные поля хода (источники KB, ожидание подтверждения) — только в ответе.
+    turn.citations = [
+        CitationOut(
+            source_id=str(c.get("source_id", "")),
+            title=str(c.get("title", "")),
+            url=c.get("url"),
+        )
+        for c in posted.citations
+        if c.get("title")
+    ]
+    turn.awaiting_confirmation = posted.awaiting_confirmation
+    return turn
 
 
 @router.post(

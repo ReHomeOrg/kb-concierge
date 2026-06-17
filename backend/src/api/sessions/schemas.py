@@ -33,6 +33,14 @@ class MessageCreate(BaseModel):
     content: str = Field(min_length=1, max_length=8000)
 
 
+class CitationOut(BaseModel):
+    """Источник-цитата ответа из базы знаний (для кликабельных ссылок в UI)."""
+
+    source_id: str = ""
+    title: str
+    url: str | None = None
+
+
 class TurnRead(BaseModel):
     """Реплика диалога в ответе API (видна владельцу/оператору)."""
 
@@ -42,6 +50,10 @@ class TurnRead(BaseModel):
     intent: str | None = None
     confidence: float | None = None
     ts: datetime.datetime
+    # Транзитные поля хода (не из БД): структурные цитаты ответа KB и признак
+    # ожидания подтверждения write-действия (FR-7.4). Пустые для истории сессии.
+    citations: list[CitationOut] = Field(default_factory=list)
+    awaiting_confirmation: bool = False
 
     @classmethod
     def from_orm_turn(cls, turn: AgentTurn) -> TurnRead:

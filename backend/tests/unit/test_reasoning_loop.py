@@ -71,6 +71,8 @@ async def test_info_qa_answer_with_citations() -> None:
     assert "Аренда" in out.reply  # цитата в ответе
     assert out.tool_calls == 1
     assert out.degraded is False
+    # Структурные цитаты отдаются ходом (кликабельные источники в UI).
+    assert out.citations == [{"title": "Аренда"}]
 
 
 class _FakeAnswerTool:
@@ -98,6 +100,7 @@ async def test_info_qa_uses_rag_answer_when_enabled() -> None:
     )
     assert "RAG-ответ" in out.reply  # синтез использован
     assert "Аренда" in out.reply  # источник приложен
+    assert out.citations == [{"title": "Аренда"}]  # структурные цитаты хода
     assert out.tool_calls == 1
     assert out.degraded is False
 

@@ -15,7 +15,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from api.auth.jwks import JwksCache
 from api.auth.jwt_verifier import JwtVerifier
-from api.auth.principal import Principal
+from api.auth.principal import Principal, PrincipalKind
+from api.auth.token_context import bind_user_access_token
 from api.config import Settings, get_settings
 from api.errors import ProblemException
 from api.observability.context import bind_actor_sub
@@ -54,4 +55,9 @@ async def get_current_principal(
         raise ProblemException.unauthorized(detail="Missing bearer token")
     principal = await verifier.verify(credentials.credentials)
     bind_actor_sub(str(principal.user_id))  # actor_sub в логи (observability)
+    if principal.kind is PrincipalKind.USER:
+        # Read-only делегирование (G7): входящий токен пользователя доступен
+        # passthrough-провайдеру для вызовов от имени пользователя. Только для
+        # USER — m2m/operator-вызовы downstream остаются на сервис-токене.
+        bind_user_access_token(credentials.credentials)
     return principal

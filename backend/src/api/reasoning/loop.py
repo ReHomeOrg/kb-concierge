@@ -80,6 +80,10 @@ class LoopResult:
     awaiting_confirmation: bool = False
     # Исполнено write-действие (после согласия) — для аудита ACTION_TAKEN (§6.1).
     action_taken: bool = False
+    # Структурные цитаты ответа из базы знаний (для кликабельных источников в UI).
+    # Транзитные: отдаются в ответе хода, в БД не персистятся (текстовые источники
+    # остаются в content). Пусто для не-INFO_QA ходов.
+    citations: list[dict[str, Any]] = field(default_factory=list)
 
     def to_trace(self) -> dict[str, Any]:
         return {
@@ -255,6 +259,7 @@ class ReasoningLoop:
             observations=[obs],
             tool_calls=1,
             steps=2,
+            citations=citations,
         )
 
     async def _answer_from_kb_rag(self, query_masked: str, context: ToolContext) -> LoopResult:
@@ -282,6 +287,7 @@ class ReasoningLoop:
             observations=[obs],
             tool_calls=1,
             steps=2,
+            citations=citations,
         )
 
 

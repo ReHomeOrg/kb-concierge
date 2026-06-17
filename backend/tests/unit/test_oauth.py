@@ -12,7 +12,9 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 
+from api.auth.token_context import bind_user_access_token
 from api.clients.auth import (
+    DelegatedUserTokenProvider,
     OAuth2TokenProvider,
     StaticTokenProvider,
     build_token_provider,
@@ -132,3 +134,36 @@ def test_build_token_provider_static_without_oauth() -> None:
 def test_build_token_provider_oauth_when_configured() -> None:
     settings = Settings(oauth_token_url=_URL, oauth_client_id="agent", oauth_client_secret="s")
     assert isinstance(build_token_provider(settings), OAuth2TokenProvider)
+
+
+# ── DelegatedUserTokenProvider (Variant C: read-only passthrough пользовательского токена) ──
+
+
+@pytest.mark.asyncio
+async def test_delegated_passthrough_uses_user_token_on_behalf_of() -> None:
+    """on_behalf_of задан + токен пользователя в контексте → отдаём токен пользователя."""
+    bind_user_access_token("user-jwt")
+    try:
+        provider = DelegatedUserTokenProvider(StaticTokenProvider("m2m"))
+        assert await provider.get_token(on_behalf_of="sub-123") == "user-jwt"
+    finally:
+        bind_user_access_token(None)
+
+
+@pytest.mark.asyncio
+async def test_delegated_passthrough_falls_back_to_base_without_context_token() -> None:
+    """on_behalf_of задан, но токена пользователя в контексте нет → базовый провайдер."""
+    bind_user_access_token(None)
+    provider = DelegatedUserTokenProvider(StaticTokenProvider("m2m"))
+    assert await provider.get_token(on_behalf_of="sub-123") == "m2m"
+
+
+@pytest.mark.asyncio
+async def test_delegated_passthrough_uses_base_when_not_delegated() -> None:
+    """on_behalf_of=None → базовый провайдер; токен пользователя в контексте игнорируется."""
+    bind_user_access_token("user-jwt")
+    try:
+        provider = DelegatedUserTokenProvider(StaticTokenProvider("m2m"))
+        assert await provider.get_token(on_behalf_of=None) == "m2m"
+    finally:
+        bind_user_access_token(None)
