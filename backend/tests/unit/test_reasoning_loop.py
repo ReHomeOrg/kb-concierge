@@ -87,6 +87,14 @@ class _FakeAnswerTool:
         return self._result
 
 
+class _RaisingAnswerTool:
+    name = "kb.answer"
+    description = "fake"
+
+    async def run(self, payload: Mapping[str, Any], context: ToolContext) -> ToolResult:
+        raise RuntimeError("answer boom")
+
+
 async def test_info_qa_uses_rag_answer_when_enabled() -> None:
     # K-4 #15: rag_answer=True + kb.answer зарегистрирован → INFO_QA через RAG-синтез.
     reg = ToolRegistry()
@@ -135,6 +143,55 @@ async def test_rag_answer_falls_back_to_kb_search_when_unavailable() -> None:
     assert out.citations == [{"title": "Аренда"}]
     # Трасса хранит обе попытки (kb.answer + kb.search) для объяснимости (NFR-10).
     assert {o.tool for o in out.observations} == {"kb.answer", "kb.search"}
+
+
+async def test_rag_answer_zero_budget_degrades_to_no_answer() -> None:
+    # FR-6.2: нулевой бюджет вызовов на RAG-пути → инструмент не вызываем, честный отказ.
+    reg = ToolRegistry()
+    reg.register(_FakeAnswerTool(ToolResult(data={"answer": "x", "citations": []})))
+    loop = ReasoningLoop(reg, Limits(max_tool_calls=0), rag_answer=True)
+    out = await loop.run(
+        decision=_answer_decision(), intent=Intent.INFO_QA, query_masked="q", context=_CTX
+    )
+    assert out.tool_calls == 0  # инструмент не вызван
+    assert out.degraded is True
+    assert out.no_answer is True
+    assert "специалист" in out.reply.lower()
+
+
+async def test_rag_answer_exception_falls_back_to_kb_search() -> None:
+    # except-ветка _answer_from_kb_rag: исключение kb.answer → откат к kb.search (G6/FR-6.6).
+    reg = ToolRegistry()
+    reg.register(_RaisingAnswerTool())
+    reg.register(
+        _FakeKbTool(ToolResult(data={"answer": "Из цитат", "citations": [{"title": "Аренда"}]}))
+    )
+    loop = ReasoningLoop(reg, Limits(max_tool_calls=3), rag_answer=True)
+    out = await loop.run(
+        decision=_answer_decision(), intent=Intent.INFO_QA, query_masked="q", context=_CTX
+    )
+    assert out.degraded is False  # откат дал ответ, не падение
+    assert out.no_answer is False
+    assert "Из цитат" in out.reply
+    # Сбой kb.answer зафиксирован в трассе как unavailable рядом с успешным kb.search.
+    answer_obs = next(o for o in out.observations if o.tool == "kb.answer")
+    assert answer_obs.unavailable is True
+    assert {o.tool for o in out.observations} == {"kb.answer", "kb.search"}
+
+
+async def test_rag_answer_exception_without_search_is_honest_refusal() -> None:
+    # except-ветка без kb.search в реестре → откат невозможен → честный отказ (no_answer).
+    reg = ToolRegistry()
+    reg.register(_RaisingAnswerTool())
+    loop = ReasoningLoop(reg, Limits(max_tool_calls=3), rag_answer=True)
+    out = await loop.run(
+        decision=_answer_decision(), intent=Intent.INFO_QA, query_masked="q", context=_CTX
+    )
+    assert out.degraded is True
+    assert out.no_answer is True
+    assert "специалист" in out.reply.lower()
+    assert out.observations[0].tool == "kb.answer"
+    assert out.observations[0].unavailable is True
 
 
 async def test_info_qa_degrades_when_unavailable() -> None:
