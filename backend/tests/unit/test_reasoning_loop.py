@@ -68,7 +68,8 @@ async def test_info_qa_answer_with_citations() -> None:
         query_masked="как продлить",
         context=_CTX,
     )
-    assert "Аренда" in out.reply  # цитата в ответе
+    assert "Договор продлевается" in out.reply  # текст ответа (без хвоста источников)
+    assert "источник" not in out.reply.lower()  # источники не вклеены в текст
     assert out.tool_calls == 1
     assert out.degraded is False
     # Структурные цитаты отдаются ходом (кликабельные источники в UI).
@@ -99,13 +100,13 @@ async def test_info_qa_uses_rag_answer_when_enabled() -> None:
         decision=_answer_decision(), intent=Intent.INFO_QA, query_masked="q", context=_CTX
     )
     assert "RAG-ответ" in out.reply  # синтез использован
-    assert "Аренда" in out.reply  # источник приложен
-    assert out.citations == [{"title": "Аренда"}]  # структурные цитаты хода
+    assert out.citations == [{"title": "Аренда"}]  # структурные цитаты хода (не в тексте)
     assert out.tool_calls == 1
     assert out.degraded is False
 
 
 async def test_rag_answer_degrades_to_no_answer_when_unavailable() -> None:
+    # Только kb.answer зарегистрирован (нет kb.search) → откат невозможен, честный отказ.
     reg = ToolRegistry()
     reg.register(_FakeAnswerTool(ToolResult(data={"citations": []}, unavailable=True)))
     loop = ReasoningLoop(reg, Limits(max_tool_calls=3), rag_answer=True)
@@ -113,7 +114,27 @@ async def test_rag_answer_degrades_to_no_answer_when_unavailable() -> None:
         decision=_answer_decision(), intent=Intent.INFO_QA, query_masked="q", context=_CTX
     )
     assert out.degraded is True  # нет ответа → деградация (не выдумываем)
+    assert out.no_answer is True  # отдельный сигнал провала retrieval (метрика §11)
     assert "специалист" in out.reply.lower()  # _NO_ANSWER_REPLY
+
+
+async def test_rag_answer_falls_back_to_kb_search_when_unavailable() -> None:
+    # G6: kb.answer недоступен, но kb.search есть → безопасный откат к цитатам, не отказ.
+    reg = ToolRegistry()
+    reg.register(_FakeAnswerTool(ToolResult(data={"citations": []}, unavailable=True)))
+    reg.register(
+        _FakeKbTool(ToolResult(data={"answer": "Из цитат", "citations": [{"title": "Аренда"}]}))
+    )
+    loop = ReasoningLoop(reg, Limits(max_tool_calls=3), rag_answer=True)
+    out = await loop.run(
+        decision=_answer_decision(), intent=Intent.INFO_QA, query_masked="q", context=_CTX
+    )
+    assert out.degraded is False  # откат дал ответ
+    assert out.no_answer is False
+    assert "Из цитат" in out.reply
+    assert out.citations == [{"title": "Аренда"}]
+    # Трасса хранит обе попытки (kb.answer + kb.search) для объяснимости (NFR-10).
+    assert {o.tool for o in out.observations} == {"kb.answer", "kb.search"}
 
 
 async def test_info_qa_degrades_when_unavailable() -> None:

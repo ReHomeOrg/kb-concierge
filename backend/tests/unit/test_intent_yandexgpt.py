@@ -12,7 +12,7 @@ import pytest
 from api.config import Settings
 from api.intent.enums import Intent
 from api.intent.provider import NullLLMProvider
-from api.intent.yandexgpt import YandexGptProvider, build_llm_provider
+from api.intent.yandexgpt import _SYSTEM_PROMPT, YandexGptProvider, build_llm_provider
 
 _CONFIGURED = Settings(
     intent_llm_provider="yandexgpt", yandexgpt_api_key="k", yandexgpt_folder_id="f"
@@ -93,3 +93,13 @@ def test_build_provider_inert_by_default() -> None:
 
 def test_build_provider_yandexgpt_when_configured() -> None:
     assert isinstance(build_llm_provider(_CONFIGURED), YandexGptProvider)
+
+
+def test_system_prompt_carries_boundary_few_shot() -> None:
+    # Few-shot на спорных границах — регрессия точности классификации (не удалять молча).
+    assert "Примеры" in _SYSTEM_PROMPT
+    assert "верните деньги" in _SYSTEM_PROMPT  # жалоба + услуга → SUPPORT_ISSUE
+    assert "ремонт смесителя" in _SYSTEM_PROMPT  # услуга без жалобы → PARTNER_SERVICE
+    assert _SYSTEM_PROMPT.count("→") >= 6  # минимум 6 размеченных примеров
+    # Без ПДн в промпте (G3): только классы и обобщённые формулировки.
+    assert "@" not in _SYSTEM_PROMPT

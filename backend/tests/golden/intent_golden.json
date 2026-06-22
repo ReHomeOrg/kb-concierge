@@ -15,6 +15,15 @@
     {"text": "Оказано некачественно, недоволен", "intent": "SUPPORT_ISSUE"},
     {"text": "Здравствуйте!", "intent": "SMALL_TALK"},
     {"text": "Спасибо большое", "intent": "SMALL_TALK"},
+    {"text": "До свидания, всего доброго", "intent": "SMALL_TALK"},
+    {"text": "Какой режим работы офиса?", "intent": "INFO_QA"},
+    {"text": "Сколько действует гарантия?", "intent": "INFO_QA"},
+    {"text": "Закажите грузчиков на выходные", "intent": "PARTNER_SERVICE"},
+    {"text": "Нужно вывезти старую мебель", "intent": "PARTNER_SERVICE"},
+    {"text": "Под раковиной протечка, вызовите мастера", "intent": "PARTNER_SERVICE"},
+    {"text": "Не работает розетка в комнате", "intent": "PARTNER_SERVICE"},
+    {"text": "Меня обманули при оплате", "intent": "SUPPORT_ISSUE"},
+    {"text": "Сотрудник нагрубил по телефону", "intent": "SUPPORT_ISSUE"},
     {"text": "Расскажи анекдот про кота", "intent": "OUT_OF_SCOPE"}
   ]
 }

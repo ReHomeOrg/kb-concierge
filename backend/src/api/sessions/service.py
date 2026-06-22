@@ -66,6 +66,9 @@ def _action_kind(loop_result: LoopResult, outcome: AgentActionKind) -> str:
         return "handoff"
     if loop_result.action_taken:
         return "action_taken"
+    if loop_result.no_answer:
+        # INFO_QA без ответа из БЗ — отдельный сигнал от общего degraded (дыры retrieval).
+        return "no_answer"
     if loop_result.degraded:
         return "degraded"
     if outcome is AgentActionKind.CLARIFY:

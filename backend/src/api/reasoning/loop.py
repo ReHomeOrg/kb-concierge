@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from api.intent.enums import Intent
@@ -80,6 +80,10 @@ class LoopResult:
     awaiting_confirmation: bool = False
     # Исполнено write-действие (после согласия) — для аудита ACTION_TAKEN (§6.1).
     action_taken: bool = False
+    # INFO_QA не дал ответа из базы знаний (промах retrieval / недоступность инструмента).
+    # Отдельный операционный сигнал от общего `degraded` (метрика kind="no_answer", §11):
+    # высокая доля → дыры в retrieval/контенте БЗ, а не сбой соседа-модуля.
+    no_answer: bool = False
     # Структурные цитаты ответа из базы знаний (для кликабельных источников в UI).
     # Транзитные: отдаются в ответе хода, в БД не персистятся (текстовые источники
     # остаются в content). Пусто для не-INFO_QA ходов.
@@ -94,6 +98,7 @@ class LoopResult:
             "handoff": self.handoff,
             "awaiting_confirmation": self.awaiting_confirmation,
             "action_taken": self.action_taken,
+            "no_answer": self.no_answer,
         }
 
 
@@ -233,27 +238,38 @@ class ReasoningLoop:
             action_taken=True,
         )
 
+    @staticmethod
+    def _no_answer(
+        *, observations: list[Observation] | None = None, tool_calls: int = 0, steps: int = 1
+    ) -> LoopResult:
+        """Честный отказ INFO_QA: не выдумываем (FR-6.5/6.6). `no_answer` — отдельный
+        операционный сигнал поверх `degraded` (метрика §11)."""
+        return LoopResult(
+            reply=_NO_ANSWER_REPLY,
+            observations=observations or [],
+            tool_calls=tool_calls,
+            steps=steps,
+            degraded=True,
+            no_answer=True,
+        )
+
     async def _answer_from_kb(self, query_masked: str, context: ToolContext) -> LoopResult:
         """Выполнить kb.search и собрать ответ с цитатами; деградация → уточнение."""
         if self._limits.max_tool_calls < 1:
             # Бюджет вызовов исчерпан/нулевой → не зацикливаемся, деградируем (FR-6.2).
-            return LoopResult(reply=_NO_ANSWER_REPLY, steps=1, degraded=True)
+            return self._no_answer(steps=1)
         try:
             result = await self._registry.call(_KB_SEARCH, {"query": query_masked}, context)
         except Exception:
             # FR-6.6: сбой инструмента не валит ход.
             obs = Observation(tool=_KB_SEARCH, unavailable=True, summary=wrap_untrusted("error"))
-            return LoopResult(
-                reply=_NO_ANSWER_REPLY, observations=[obs], tool_calls=1, steps=2, degraded=True
-            )
+            return self._no_answer(observations=[obs], tool_calls=1, steps=2)
 
         citations = result.data.get("citations") or []
         summary = wrap_untrusted(f"kb.search: {len(citations)} результат(ов)")
         obs = Observation(tool=_KB_SEARCH, unavailable=result.unavailable, summary=summary)
         if result.unavailable or not citations:
-            return LoopResult(
-                reply=_NO_ANSWER_REPLY, observations=[obs], tool_calls=1, steps=2, degraded=True
-            )
+            return self._no_answer(observations=[obs], tool_calls=1, steps=2)
         return LoopResult(
             reply=_build_answer(result.data, citations),
             observations=[obs],
@@ -264,24 +280,21 @@ class ReasoningLoop:
 
     async def _answer_from_kb_rag(self, query_masked: str, context: ToolContext) -> LoopResult:
         """RAG-ответ через kb.answer (chat-роут, синтез). Деградация (нет ответа/сбой) →
-        _NO_ANSWER_REPLY (не падаем, не выдумываем); цитаты прикладываются как источники."""
+        безопасный откат к детерминированным цитатам kb.search (G6), и лишь затем —
+        честный отказ. Не падаем, не выдумываем (FR-6.5/6.6)."""
         if self._limits.max_tool_calls < 1:
-            return LoopResult(reply=_NO_ANSWER_REPLY, steps=1, degraded=True)
+            return self._no_answer(steps=1)
         try:
             result = await self._registry.call(_KB_ANSWER, {"query": query_masked}, context)
         except Exception:
             obs = Observation(tool=_KB_ANSWER, unavailable=True, summary=wrap_untrusted("error"))
-            return LoopResult(
-                reply=_NO_ANSWER_REPLY, observations=[obs], tool_calls=1, steps=2, degraded=True
-            )
+            return await self._rag_fallback(query_masked, context, [obs])
         answer = result.data.get("answer")
         citations = result.data.get("citations") or []
         summary = wrap_untrusted(f"kb.answer: {len(citations)} источник(ов)")
         obs = Observation(tool=_KB_ANSWER, unavailable=result.unavailable, summary=summary)
         if result.unavailable or not answer:
-            return LoopResult(
-                reply=_NO_ANSWER_REPLY, observations=[obs], tool_calls=1, steps=2, degraded=True
-            )
+            return await self._rag_fallback(query_masked, context, [obs])
         return LoopResult(
             reply=_build_answer(result.data, citations),
             observations=[obs],
@@ -290,12 +303,28 @@ class ReasoningLoop:
             citations=citations,
         )
 
+    async def _rag_fallback(
+        self, query_masked: str, context: ToolContext, prior: list[Observation]
+    ) -> LoopResult:
+        """RAG-синтез не дал ответа → деградация в сторону безопасности (G6): если есть
+        kb.search — отвечаем детерминированными цитатами, иначе честный отказ. Наблюдения
+        kb.answer сохраняются в трассе (объяснимость, NFR-10)."""
+        if self._registry.get(_KB_SEARCH) is None:
+            return self._no_answer(observations=prior, tool_calls=len(prior), steps=len(prior) + 1)
+        fb = await self._answer_from_kb(query_masked, context)
+        return replace(
+            fb,
+            observations=[*prior, *fb.observations],
+            tool_calls=fb.tool_calls + len(prior),
+            steps=fb.steps + len(prior),
+        )
+
 
 def _build_answer(data: dict[str, Any], citations: list[dict[str, Any]]) -> str:
-    """Детерминированная сборка ответа из результатов KB (LLM-синтез — ADR-0003)."""
-    base = data.get("answer") or citations[0].get("snippet") or "Вот что удалось найти."
-    titles = ", ".join(str(c.get("title", "")) for c in citations[:3] if c.get("title"))
-    return f"{base} (источники: {titles})" if titles else str(base)
+    """Текст ответа из результатов KB (LLM-синтез — ADR-0003). Источники НЕ вклеиваются
+    в текст: они отдаются структурно (`LoopResult.citations`) для кликабельных ссылок в
+    UI — чище и не дублируется."""
+    return str(data.get("answer") or citations[0].get("snippet") or "Вот что удалось найти.")
 
 
 def _partner_reply(data: dict[str, Any]) -> str:
