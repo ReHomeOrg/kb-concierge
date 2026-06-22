@@ -66,7 +66,9 @@ async def test_info_qa_executes_kb_search_with_citations(
     resp = await make_client(principal).post(
         f"{_MSGS}/{sess.id}/messages", json={"content": "как продлить договор"}
     )
-    assert "Аренда" in resp.json()["content"]  # цитата из kb.search в ответе
+    content = resp.json()["content"]
+    assert "Договор продлевается" in content  # текст ответа из kb.search
+    assert "источник" not in content.lower()  # источники структурны, в текст не вклеены
 
     actions = (
         await session.scalars(select(AuditLog.action).where(AuditLog.session_id == sess.id))

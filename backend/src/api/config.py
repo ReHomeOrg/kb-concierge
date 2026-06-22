@@ -125,10 +125,12 @@ class Settings(BaseSettings):
     # через OAuth2 по ADR). ПУСТОЙ base_url → инструмент инертен/деградирует. ---
     kb_search_api_base_url: str = Field(default="", description="Base URL kb-search (RAG).")
     kb_search_api_token: str = Field(default="", description="Fallback-токен kb-search (dev).")
-    # K-4 #15: RAG-ответ (синтез) через chat-роут kb-search. ПО УМОЛЧАНИЮ ВЫКЛ — INFO_QA
-    # отвечает детерминированно цитатами kb.search; включение даёт LLM-синтез (kb.answer).
+    # K-4 #15: RAG-ответ (синтез) через chat-роут kb-search. ПО УМОЛЧАНИЮ ВКЛ — INFO_QA
+    # отвечает синтезированным текстом (kb.answer); при недоступности chat-роута ход
+    # безопасно деградирует к детерминированным цитатам kb.search (loop._rag_fallback, G6),
+    # поэтому включение безопасно даже до готовности chat-роута соседа.
     kb_rag_answer_enabled: bool = Field(
-        default=False, description="INFO_QA через RAG-синтез (kb.answer) вместо цитат kb.search."
+        default=True, description="INFO_QA через RAG-синтез kb.answer; иначе цитаты kb.search"
     )
     platform_api_base_url: str = Field(default="", description="Base URL rehome.one (контекст).")
     platform_api_token: str = Field(default="", description="Fallback-токен rehome.one (dev).")

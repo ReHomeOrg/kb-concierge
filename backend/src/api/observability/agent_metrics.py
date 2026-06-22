@@ -46,7 +46,11 @@ def record_policy(outcome: str, reason: str) -> None:
 
 
 def record_action(kind: str) -> None:
-    """`kind` ∈ answered/clarify/handoff/awaiting_confirmation/action_taken/degraded."""
+    """`kind` ∈ answered/clarify/handoff/awaiting_confirmation/action_taken/no_answer/degraded.
+
+    `no_answer` — INFO_QA не нашёл ответа в БЗ (сигнал дыр retrieval); отделён от общего
+    `degraded` (недоступность соседа-модуля), т.к. это разные операционные проблемы.
+    """
     AGENT_ACTIONS.labels(kind=kind).inc()
 
 
