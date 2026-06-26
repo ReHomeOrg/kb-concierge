@@ -106,6 +106,8 @@ async def post_message_endpoint(
             category=posted.summary.get("category"),
             fields={str(k): str(v) for k, v in (posted.summary.get("fields") or {}).items()},
             address=posted.summary.get("address"),
+            price_range=posted.summary.get("price_range"),
+            eta=posted.summary.get("eta"),
         )
     turn.options = [
         OptionOut(id=str(o.get("id", "")), label=str(o.get("label", "")))

@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from api.intent.engine import CAPABILITIES_KEYWORDS
+from api.intent.engine import CAPABILITIES_KEYWORDS, PARTNER_SERVICE_KEYWORDS
 from api.intent.enums import Intent
 from api.policy.engine import PolicyDecision
 from api.policy.enums import AgentActionKind
@@ -48,8 +48,13 @@ _PARTNERS_CREATE = "partners.create_request"
 _PARTNERS_CLASSIFY = "partners.classify"
 _PARTNERS_DISPATCH = "partners.dispatch"
 _PARTNERS_GET_STATUS = "partners.get_status"
+_PARTNERS_ESTIMATE = "partners.estimate"
 _SUPPORT_CREATE = "support.create_ticket"
 _SUPPORT_GET_STATUS = "support.get_status"
+
+# Мост «инфо→действие» (#11): предложить оформить заявку после ответа из базы знаний.
+_INFO_ACTION_OFFER = " Если нужно — могу оформить заявку на услугу."
+_INFO_ACTION_OPTION = {"id": "order", "label": "Оформить заявку"}
 
 # Discovery (#15): меню сценариев в ответ на «что умеешь / меню».
 _CAPABILITIES_REPLY = (
@@ -207,6 +212,32 @@ class ReasoningLoop:
             address = premises[0].get("address")
             return str(address) if address else None
         return None
+
+    async def fetch_estimate(
+        self, category: str, query_masked: str, context: ToolContext
+    ) -> dict[str, str] | None:
+        """Диапазон цены/срока услуги от kb-partners (#12) для сводки заявки.
+
+        Числа — АВТОРИТЕТНО от модуля (G1, не от LLM). Инструмент `partners.estimate`
+        config-gated: пока не подключён (нет эндпоинта у соседа) → None, сводка без оценки
+        (деградация FR-6.6). Возвращает {price_range?, eta?}.
+        """
+        if self._registry.get(_PARTNERS_ESTIMATE) is None:
+            return None
+        try:
+            result = await self._registry.call(
+                _PARTNERS_ESTIMATE, {"category": category, "query": query_masked}, context
+            )
+        except Exception:
+            return None
+        if result.unavailable:
+            return None
+        out: dict[str, str] = {}
+        if result.data.get("price_range"):
+            out["price_range"] = str(result.data["price_range"])
+        if result.data.get("eta"):
+            out["eta"] = str(result.data["eta"])
+        return out or None
 
     async def _run_status_query(
         self, decision: PolicyDecision, context: ToolContext, refs: dict[str, Any]
@@ -401,12 +432,14 @@ class ReasoningLoop:
             return LoopResult(
                 reply=_NO_ANSWER_REPLY, observations=[obs], tool_calls=1, steps=2, degraded=True
             )
+        reply, options = _with_info_offer(_build_answer(result.data, citations), query_masked)
         return LoopResult(
-            reply=_build_answer(result.data, citations),
+            reply=reply,
             observations=[obs],
             tool_calls=1,
             steps=2,
             citations=citations,
+            options=options,
         )
 
     async def _answer_from_kb_rag(self, query_masked: str, context: ToolContext) -> LoopResult:
@@ -429,13 +462,26 @@ class ReasoningLoop:
             return LoopResult(
                 reply=_NO_ANSWER_REPLY, observations=[obs], tool_calls=1, steps=2, degraded=True
             )
+        reply, options = _with_info_offer(_build_answer(result.data, citations), query_masked)
         return LoopResult(
-            reply=_build_answer(result.data, citations),
+            reply=reply,
             observations=[obs],
             tool_calls=1,
             steps=2,
             citations=citations,
+            options=options,
         )
+
+
+def _with_info_offer(reply: str, query_masked: str) -> tuple[str, list[dict[str, str]]]:
+    """Мост «инфо→действие» (#11): вопрос про услугу → предложить оформить заявку.
+
+    Детерминированно (ключи партнёрских услуг); иначе — ответ без оффера.
+    """
+    text = query_masked.lower()
+    if any(kw in text for kw in PARTNER_SERVICE_KEYWORDS):
+        return reply + _INFO_ACTION_OFFER, [dict(_INFO_ACTION_OPTION)]
+    return reply, []
 
 
 def _is_capabilities_query(query_masked: str) -> bool:

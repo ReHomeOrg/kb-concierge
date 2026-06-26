@@ -612,12 +612,20 @@ class SessionService:
         if not loop_result.awaiting_confirmation or category not in ORDER_CATEGORIES:
             return
         address = await reasoning_loop.fetch_address(tool_context)
-        loop_result.summary = {
+        summary: dict[str, Any] = {
             "kind": "partner_request",
             "category": category,
             "fields": dict(answers),
             "address": address,
         }
+        # #12: диапазон цены/срока от kb-partners (авторитетно, G1). Нет оценки → без полей.
+        estimate = await reasoning_loop.fetch_estimate(
+            category, "; ".join(str(v) for v in answers.values()), tool_context
+        )
+        if estimate:
+            summary["price_range"] = estimate.get("price_range")
+            summary["eta"] = estimate.get("eta")
+        loop_result.summary = summary
 
     def _reopen_for_edit(
         self,

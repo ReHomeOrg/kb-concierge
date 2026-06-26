@@ -35,6 +35,12 @@ _PARTNER_CATEGORY: dict[str, tuple[str, ...]] = {
     "KEY_DELIVERY": ("ключ", "доставка ключ", "передать ключ"),
 }
 
+# Плоский список ключей партнёрских услуг (используется и для intent-правил, и для
+# моста «инфо→действие» #11 в ходе — без дублирования).
+PARTNER_SERVICE_KEYWORDS: tuple[str, ...] = tuple(
+    kw for kws in _PARTNER_CATEGORY.values() for kw in kws
+)
+
 # Фразы-триггеры «что умею / меню» (discovery, #15). Маршрутизируются как SMALL_TALK
 # (низкорисковый прямой ответ), а ход отдаёт меню-сценариев вместо приветствия.
 CAPABILITIES_KEYWORDS: tuple[str, ...] = (
@@ -93,7 +99,7 @@ _KEYWORDS: dict[Intent, tuple[str, ...]] = {
         "режим работы",
         "сколько действ",
     ),
-    Intent.PARTNER_SERVICE: tuple(kw for kws in _PARTNER_CATEGORY.values() for kw in kws),
+    Intent.PARTNER_SERVICE: PARTNER_SERVICE_KEYWORDS,
     Intent.STATUS_QUERY: _STATUS_KEYWORDS,
     Intent.SUPPORT_ISSUE: (
         "жалоб",

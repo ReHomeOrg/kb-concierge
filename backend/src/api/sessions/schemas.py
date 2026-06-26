@@ -53,6 +53,9 @@ class ProposedActionOut(BaseModel):
     category: str | None = None
     fields: dict[str, str] = Field(default_factory=dict)
     address: str | None = None
+    # Оценка от kb-partners (#12): диапазон цены/срока. None, если оценка недоступна.
+    price_range: str | None = None
+    eta: str | None = None
 
 
 class OptionOut(BaseModel):
