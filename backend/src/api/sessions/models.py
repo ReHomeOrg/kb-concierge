@@ -135,6 +135,21 @@ class AgentTurn(Base):
     )
 
 
+class UserPreference(Base, TimestampMixin):
+    """Предпочтения пользователя между сессиями (#3): «как обычно».
+
+    Своя БД (арх-константа): ключ — `user_id` (sub из JWT, строковая ссылка, не FK).
+    `prefs` JSONB: {category, fields:{<стабильный ключ §3>: значение}} — ТОЛЬКО
+    маскированные/неденежные значения (G3/G1), диалоговая память, не доменное состояние.
+    Анонимные сессии предпочтений не имеют. Чистится при праве на забвение.
+    """
+
+    __tablename__ = "user_preferences"
+
+    user_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    prefs: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+
+
 class AuditLog(Base):
     """Неизменяемый аудит решений/вызовов агента (§4, NFR-6).
 

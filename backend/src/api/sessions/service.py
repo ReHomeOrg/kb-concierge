@@ -65,6 +65,9 @@ _FIELD_FALLBACK_REPLY = "Уточните, пожалуйста, детали з
 _FEEDBACK_OFFER = " Помогло ли решение? Напишите «помогло» или «не помогло»."
 _FEEDBACK_THANKS = "Спасибо за оценку! Обращайтесь, если понадобится ещё."
 _FEEDBACK_SORRY = "Жаль, что не помогло. Если нужно — передам вопрос специалисту, напишите об этом."
+# Стабильные поля §3, которые имеет смысл помнить между сессиями (#3): осознанный выбор,
+# а не меняющиеся дата/площадь/описание. Деньги/ПДн сюда не попадают (G1/G3).
+_STABLE_PREF_KEYS = ("cleaning_type", "city", "movers_packing", "access")
 # Человекочитаемые метки обязательных полей §3 (для вопроса «что изменить?», #9).
 _FIELD_LABELS: dict[str, str] = {
     "cleaning_type": "тип уборки",
@@ -400,7 +403,7 @@ class SessionService:
             else ""
         )
         if decision.outcome is AgentActionKind.TOOL_CALL and category in ORDER_CATEGORIES:
-            answers = extract_fields(category, masked)
+            answers = await self._merge_prefs(session, category, extract_fields(category, masked))
             missing = missing_fields(category, answers)
             if missing:
                 return self._begin_order_flow(
@@ -471,6 +474,39 @@ class SessionService:
             )
         return loop_result.reply, loop_result
 
+    async def _merge_prefs(
+        self, session: AgentSession, category: str, answers: dict[str, str]
+    ) -> dict[str, str]:
+        """Подставить предпочтения пользователя «как обычно» (#3) в незаполненные стабильные
+        поля. Анонимная сессия → без изменений. Только стабильные ключи §3 (G1/G3)."""
+        if session.user_id is None:
+            return answers
+        prefs = await self._repo.get_user_prefs(session.user_id)
+        stored = (prefs or {}).get("fields", {})
+        if not isinstance(stored, dict):
+            return answers
+        keys = required_keys(category)
+        for key in _STABLE_PREF_KEYS:
+            if key in keys and not answers.get(key) and stored.get(key):
+                answers[key] = str(stored[key])
+        return answers
+
+    async def _save_prefs(
+        self, session: AgentSession, category: str, answers: dict[str, str]
+    ) -> None:
+        """Запомнить стабильные поля заявки в предпочтения пользователя (#3). Аноним → no-op."""
+        if session.user_id is None:
+            return
+        fields = {k: answers[k] for k in _STABLE_PREF_KEYS if answers.get(k)}
+        if not fields:
+            return
+        existing = await self._repo.get_user_prefs(session.user_id) or {}
+        existing_fields = existing.get("fields") if isinstance(existing.get("fields"), dict) else {}
+        merged = {**(existing_fields or {}), **fields}
+        await self._repo.upsert_user_prefs(
+            session.user_id, {"category": category, "fields": merged}
+        )
+
     def _begin_order_flow(
         self,
         session: AgentSession,
@@ -527,6 +563,7 @@ class SessionService:
             answers.setdefault(key, value)
         if isinstance(asking, str) and not answers.get(asking):
             answers[asking] = masked  # явный ответ на заданный вопрос (маскирован, G3)
+        answers = await self._merge_prefs(session, category, answers)  # «как обычно» (#3)
 
         missing = missing_fields(category, answers)
         trace: dict[str, Any] = {
@@ -710,6 +747,12 @@ class SessionService:
             session.flow_state = None  # заявка оформлена → сбор полей завершён
             kind = "action_taken" if loop_result.action_taken else "degraded"
             record_action(kind)
+            # #3: запомнить стабильные поля оформленной заявки в предпочтения пользователя.
+            order = pending.get("order")
+            if loop_result.action_taken and isinstance(order, dict):
+                await self._save_prefs(
+                    session, str(order.get("category", "")), dict(order.get("answers") or {})
+                )
             if self._settings.webhook_subscriber_url:
                 self._emit_action_event(
                     session, str(pending.get("intent")), kind, tool_context.correlation_id
@@ -737,6 +780,8 @@ class SessionService:
         session.status = SessionStatus.FORGOTTEN
         session.forgotten_at = self._repo.now()
         session.summary = None  # сжатая память диалога — удаляется
+        if session.user_id is not None:
+            await self._repo.delete_user_prefs(session.user_id)  # #3: предпочтения — тоже
         self._repo.add_audit(
             session_id=session.id,
             actor_id=_audit_actor(principal),
