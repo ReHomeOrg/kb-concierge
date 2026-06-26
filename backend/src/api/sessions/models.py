@@ -81,6 +81,12 @@ class AgentSession(Base, TimestampMixin):
     # NULL → не идёт сбор полей заявки.
     flow_state: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
+    # Ссылки на последние созданные сущности соседей в этой сессии (#4): {partner_request_id,
+    # partner_number, support_ticket_id, support_number}. Нужны, чтобы отвечать на «что с
+    # моей заявкой?» (read-only get_status). Только идентификаторы/номера, без ПДн (G3).
+    # NULL → в сессии ещё ничего не оформлено.
+    last_refs: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
     # Сквозной correlation_id создающего запроса (NFR-13 трассировка).
     correlation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 

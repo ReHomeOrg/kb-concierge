@@ -257,6 +257,13 @@ class SessionService:
                 correlation_id=correlation_id,
             )
 
+        # #4: запомнить ссылку на созданную заявку/обращение для будущих «что с моей
+        # заявкой?» (read-only get_status). Только непустые id/номера (G3, без ПДн).
+        if loop_result is not None and loop_result.created_refs:
+            fresh = {k: v for k, v in loop_result.created_refs.items() if v is not None}
+            if fresh:
+                session.last_refs = {**(session.last_refs or {}), **fresh}
+
         # Эскалация человеку (§7.3): решение политики → реальная передача в kb-support.
         # Снимок берётся ПОСЛЕ добавления user-реплики (autoflush в list_turns) — он
         # содержит текущий вопрос; коммит — общий с ходом (escalate_in_turn без commit).
@@ -360,6 +367,7 @@ class SessionService:
             query_masked=masked,
             context=tool_context,
             confirmed=False,
+            status_refs=session.last_refs,  # #4: статус по последней заявке сессии
         )
         trace["loop"] = loop_result.to_trace()
         user_turn.intent_trace = trace

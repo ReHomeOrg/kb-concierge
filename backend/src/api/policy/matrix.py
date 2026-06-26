@@ -53,6 +53,13 @@ DEFAULT_MATRIX: dict[Intent, IntentRule] = {
         autonomous=AgentActionKind.TOOL_CALL,
         allowed_tools=("support.create_ticket",),
     ),
+    # Статус своей заявки/обращения — read-only ответ (без денег, без подтверждения,
+    # без порога): get_status по последней заявке сессии (#4).
+    Intent.STATUS_QUERY: IntentRule(
+        autonomous=AgentActionKind.ANSWER,
+        allowed_tools=("partners.get_status", "support.get_status"),
+        gated_by_confidence=False,
+    ),
     # Нестандарт — агент не решает сам (всегда эскалация).
     Intent.NON_STANDARD: IntentRule(
         autonomous=AgentActionKind.HANDOFF,
