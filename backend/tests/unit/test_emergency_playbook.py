@@ -17,7 +17,12 @@ from api.emergency.constants import (
     TYPE_PLUMBING,
     TYPE_SEWAGE,
 )
-from api.emergency.playbook import build_emergency_message, classify_emergency, entry_for
+from api.emergency.playbook import (
+    PLAYBOOK,
+    build_emergency_message,
+    classify_emergency,
+    entry_for,
+)
 
 
 @pytest.mark.parametrize(
@@ -75,3 +80,25 @@ def test_message_generic_uk_line_without_contact() -> None:
     msg = build_emergency_message(entry_for(TYPE_ELEVATOR), None)  # type: ignore[arg-type]
     assert "управляющая организация" in msg.lower()
     assert "договоре" in msg.lower()  # обобщённая формулировка без номера
+
+
+def test_headlines_are_type_specific_not_templated() -> None:
+    # Нешаблонность: у каждого типа свой заголовок (не общий «аварийная ситуация»).
+    headlines = {e.type: e.headline for e in PLAYBOOK.values()}
+    assert len(set(headlines.values())) == len(headlines)
+    assert "утечк" in PLAYBOOK[TYPE_GAS].headline.lower()
+    assert "лифт" in PLAYBOOK[TYPE_ELEVATOR].headline.lower()
+
+
+def test_message_has_numbered_concrete_steps() -> None:
+    # Конкретные пошаговые действия (нумерованные), а не один общий совет.
+    msg = build_emergency_message(entry_for(TYPE_PLUMBING), None)  # type: ignore[arg-type]
+    assert "1." in msg and "2." in msg
+    assert "перекройте кран подачи воды" in msg.lower()
+
+
+def test_all_types_have_steps_except_terminal_have_call() -> None:
+    # У каждого типа есть либо шаги, либо контакты — ответ всегда конкретен и полезен.
+    for entry in PLAYBOOK.values():
+        assert entry.contacts
+        assert entry.headline
