@@ -1,48 +1,42 @@
-"""Плейбук аварийных ситуаций (документ «Консьерж: правила обработки заявок», аварийный блок).
+"""Загрузчик плейбука аварийных ситуаций (правится БЕЗ кода).
 
-Детерминированно (rules-first, без LLM и без живого интернет-поиска — безопасно и дёшево):
-по тексту обращения определяется ТИП аварии, по нему — конкретные шаги по безопасности, кому
-звонить (единые номера + диспетчер УК из карточки/договора + физические указатели) и режим
-партнёрской заявки. Контакты НЕ берутся из интернета (нет источника неверного номера).
+Триггеры и тексты вынесены в редактируемый `playbook_data.json` рядом с модулем — их можно
+менять без правки Python (изменения проверяются golden-тестами). Ops может указать свой файл
+через `KBC_EMERGENCY_PLAYBOOK_PATH` (битый override → откат на встроенный, FR-6.6; битый
+встроенный — ошибка сборки, fail-fast, чтобы аварийный модуль не «молча» сломался).
 
-Ответы НЕ шаблонные: у каждого типа свой заголовок, пошаговые действия и контекстная строка
-«кому звонить» — конкретно и полезно. Граница: reHome занимается проблемами ВНУТРИ помещения
-по контракту; общедомовое (лифт, дом-газ) — к ответственной службе, заявку не создаём.
-Вход — ТОЛЬКО маскированный текст (G3).
+Логика остаётся детерминированной (rules-first, без LLM и интернет-поиска). Вход в
+классификатор — ТОЛЬКО маскированный текст (G3). Граница: проблемы ВНУТРИ помещения по
+контракту; общедомовое (лифт/дом-газ) — к ответственной службе, заявку не создаём.
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
-from api.emergency.constants import (
-    PARTNER_CREATE,
-    PARTNER_NONE,
-    PARTNER_OFFER,
-    SCOPE_BOTH,
-    SCOPE_COMMON,
-    SCOPE_PREMISES,
-    TYPE_ELECTRICAL,
-    TYPE_ELEVATOR,
-    TYPE_FIRE,
-    TYPE_GAS,
-    TYPE_GENERIC,
-    TYPE_HEATING,
-    TYPE_PLUMBING,
-    TYPE_SEWAGE,
-)
+from api.emergency.constants import PARTNER_CREATE, PARTNER_NONE, PARTNER_OFFER
 
-_UK = "{uk}"  # плейсхолдер контакта управляющей организации
+_logger = logging.getLogger(__name__)
+_UK = "{uk}"  # плейсхолдер контакта управляющей организации в `contacts`
+_VALID_MODES = frozenset({PARTNER_NONE, PARTNER_OFFER, PARTNER_CREATE})
+_BUNDLED_PATH = Path(__file__).with_name("playbook_data.json")
+#: env-переменная ops-override пути к файлу плейбука (необязательна).
+_OVERRIDE_ENV = "KBC_EMERGENCY_PLAYBOOK_PATH"
 
 
 @dataclass(frozen=True)
 class PlaybookEntry:
-    """Карточка реакции на тип аварии (R-аварийный)."""
+    """Карточка реакции на тип аварии (из `playbook_data.json`)."""
 
     type: str
     scope: str
-    headline: str  # тип-специфичная вводная (что это и насколько срочно)
-    steps: tuple[str, ...]  # конкретные пошаговые действия по безопасности ("" → нет)
+    headline: str  # тип-специфичная вводная
+    steps: tuple[str, ...]  # конкретные пошаговые действия по безопасности
     call_line: str  # контекстная строка перед контактами
     contacts: tuple[str, ...]  # строки «кому звонить»; `{uk}` → контакт УК
     partner_mode: str  # NONE/OFFER/CREATE
@@ -50,348 +44,81 @@ class PlaybookEntry:
     partner_question: str  # вопрос про заявку ("" для NONE)
 
 
-PLAYBOOK: dict[str, PlaybookEntry] = {
-    TYPE_GAS: PlaybookEntry(
-        type=TYPE_GAS,
-        scope=SCOPE_BOTH,
-        headline="Похоже на утечку газа — это опасно, действуйте быстро и спокойно.",
-        steps=(
-            "Не включайте и не выключайте свет и электроприборы, не звоните из помещения — "
-            "любая искра опасна.",
-            "Перекройте газовый кран (на трубе перед плитой или котлом).",
-            "Откройте окна и проветрите.",
-            "При сильном запахе выведите людей и звоните уже с улицы или от соседей.",
-        ),
-        call_line="Сразу позвоните в аварийную газовую службу:",
-        contacts=(
-            "104 — аварийная газовая служба (единый номер, соединит со службой вашего района)",
-            "112 — единая экстренная служба",
-        ),
-        partner_mode=PARTNER_OFFER,
-        repair_subcategory="газовое оборудование",
-        partner_question=(
-            "Когда станет безопасно — нужно вызвать мастера-партнёра для проверки и ремонта "
-            "газового оборудования, или вам достаточно аварийной службы?"
-        ),
-    ),
-    TYPE_FIRE: PlaybookEntry(
-        type=TYPE_FIRE,
-        scope=SCOPE_BOTH,
-        headline="Если есть открытый огонь или сильное задымление — это угроза жизни.",
-        steps=(
-            "Немедленно выведите всех из помещения.",
-            "Идите по лестнице, лифтом не пользуйтесь.",
-            "Закройте за собой дверь, чтобы замедлить распространение огня и дыма.",
-            "Небольшое возгорание можно тушить огнетушителем — но не электрику под "
-            "напряжением и не газ.",
-        ),
-        call_line="Сразу вызовите пожарных:",
-        contacts=("101 или 112 — пожарная служба",),
-        partner_mode=PARTNER_NONE,
-        repair_subcategory="",
-        partner_question="",
-    ),
-    TYPE_ELEVATOR: PlaybookEntry(
-        type=TYPE_ELEVATOR,
-        scope=SCOPE_COMMON,
-        headline="Застряли в лифте — без паники, это не опасно, помощь придёт.",
-        steps=(
-            "Нажмите и несколько секунд удерживайте кнопку вызова диспетчера в кабине.",
-            "Не пытайтесь открыть двери или выбраться из кабины самостоятельно.",
-            "Если есть телефон — позвоните в аварийную службу лифта.",
-        ),
-        call_line="Позвоните в службу, обслуживающую лифт:",
-        contacts=(
-            "аварийная служба лифта — номер на табличке в кабине лифта или у дверей",
-            _UK,
-        ),
-        partner_mode=PARTNER_NONE,  # общедомовое имущество — мастер-партнёр не применим
-        repair_subcategory="",
-        partner_question="",
-    ),
-    TYPE_PLUMBING: PlaybookEntry(
-        type=TYPE_PLUMBING,
-        scope=SCOPE_PREMISES,
-        headline="Прорыв или сильная протечка воды — главное сейчас перекрыть воду.",
-        steps=(
-            "Перекройте кран подачи воды: на самом приборе (бойлер, смеситель) или общий "
-            "запорный кран на вводе в квартиру — обычно в санузле у счётчиков.",
-            "Уберите от воды электроприборы и удлинители, если есть риск контакта.",
-            "Если уже топит соседей снизу или вода идёт со стояка — сообщите в аварийную "
-            "службу дома.",
-        ),
-        call_line="Если залило соседей или проблема в общем стояке — позвоните в УК:",
-        contacts=(_UK,),
-        partner_mode=PARTNER_CREATE,
-        repair_subcategory="сантехника",
-        partner_question=(
-            "Я могу сразу оформить заявку мастеру-сантехнику на ремонт — оформляем? Это займёт "
-            "больше времени, чем аварийное перекрытие воды."
-        ),
-    ),
-    TYPE_ELECTRICAL: PlaybookEntry(
-        type=TYPE_ELECTRICAL,
-        scope=SCOPE_PREMISES,
-        headline="Искрение, запах гари или задымление проводки — риск пожара и удара током.",
-        steps=(
-            "Отключите проблемную линию автоматом в электрощите, а при сомнениях — общий "
-            "вводной автомат.",
-            "Не трогайте искрящие или оголённые провода и приборы руками.",
-            "Не заливайте водой — это электрика.",
-            "Если задымление усиливается или появился огонь — звоните 101 или 112.",
-        ),
-        call_line="Если обесточен весь дом или повреждение в общедомовой части — звоните в УК:",
-        contacts=(_UK,),
-        partner_mode=PARTNER_CREATE,
-        repair_subcategory="электрика",
-        partner_question=(
-            "Когда станет безопасно — оформить заявку электрику-партнёру на ремонт? Это дольше, "
-            "чем просто обесточить линию."
-        ),
-    ),
-    TYPE_HEATING: PlaybookEntry(
-        type=TYPE_HEATING,
-        scope=SCOPE_BOTH,
-        headline="Нет отопления — давайте разберёмся, чья это зона ответственности.",
-        steps=(
-            "Проверьте, холодные ли батареи во всей квартире или только в одной комнате.",
-            "Если не греет весь дом или стояк — это вопрос к управляющей организации.",
-        ),
-        call_line="Если отопления нет во всём доме — позвоните в УК:",
-        contacts=(_UK,),
-        partner_mode=PARTNER_OFFER,
-        repair_subcategory="отопление",
-        partner_question=(
-            "Если проблема внутри квартиры (радиатор или котёл) — оформить заявку "
-            "мастеру-партнёру? Если не греет весь дом, это к УК."
-        ),
-    ),
-    TYPE_SEWAGE: PlaybookEntry(
-        type=TYPE_SEWAGE,
-        scope=SCOPE_BOTH,
-        headline="Засор или прорыв канализации — чтобы не затопить, не пользуйтесь стоком.",
-        steps=(
-            "Не сливайте воду и не пользуйтесь раковиной и унитазом до устранения.",
-            "Если засор в общем стояке и топит несколько квартир — это аварийная служба дома.",
-        ),
-        call_line="Если затронут общий стояк — позвоните в УК:",
-        contacts=(_UK,),
-        partner_mode=PARTNER_OFFER,
-        repair_subcategory="сантехника",
-        partner_question=(
-            "Оформить заявку мастеру-партнёру на устранение засора внутри квартиры? Это займёт "
-            "время."
-        ),
-    ),
-    TYPE_GENERIC: PlaybookEntry(
-        type=TYPE_GENERIC,
-        scope=SCOPE_BOTH,
-        headline="Похоже на аварийную ситуацию — действуем безопасно.",
-        steps=(
-            "Если есть угроза жизни или быстро растёт ущерб — сначала звоните в экстренную "
-            "службу, потом разберёмся с заявкой.",
-        ),
-        call_line="При угрозе жизни или имуществу звоните:",
-        contacts=("112 — единая экстренная служба", _UK),
-        partner_mode=PARTNER_OFFER,
-        repair_subcategory="",
-        partner_question=(
-            "Опишите коротко, что случилось, — подскажу точнее. Нужно оформить заявку "
-            "мастеру-партнёру?"
-        ),
-    ),
-}
+@dataclass(frozen=True)
+class _Playbook:
+    """Разобранный и провалидированный плейбук."""
 
-# Триггеры по типам (порядок = приоритет; первое совпадение выигрывает). Стеммы lower-case.
-# Расширены под частые формулировки. Сильные слова опасности (газ/пожар) — первыми; смежные
-# по дыму разведены: общий дым/гарь → FIRE, «дымит розетка/проводка» → ELECTRICAL (специфично).
-_TRIGGERS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (
-        TYPE_GAS,
-        (
-            "газом",
-            "газа",
-            "запах газ",
-            "запахло газ",
-            "пахнет газ",
-            "воняет газ",
-            "утечк газ",
-            "травит газ",
-            "газ травит",
-            "газ идёт",
-            "шипит газ",
-            "газом тянет",
-        ),
-    ),
-    (
-        TYPE_FIRE,
-        (
-            "пожар",
-            "задымлен",
-            "возгоран",
-            "горит",
-            "горим",
-            "загорел",
-            "загорал",
-            "полыхает",
-            "вспыхнул",
-            "открытый огонь",
-            "дым ",
-            "дыма",
-            "дымом",
-            "сильный дым",
-            "пахнет гар",
-            "запах гар",
-            "гарью",
-            "тлеет",
-        ),
-    ),
-    (
-        TYPE_ELEVATOR,
-        (
-            "лифт застр",
-            "застряли в лифт",
-            "застрял в лифт",
-            "в лифте застр",
-            "заперло в лифт",
-            "кабина застр",
-            "лифт не работает",
-            "лифт не едет",
-            "лифт сломал",
-            "сломался лифт",
-            "лифт встал",
-            "лифт остановил",
-            "лифт завис",
-            "завис лифт",
-            "двери лифта не открыв",
-        ),
-    ),
-    (
-        TYPE_ELECTRICAL,
-        (
-            "искрит",
-            "искрят",
-            "коротит",
-            "короткое замыкан",
-            "замыкан",
-            "дымит розет",
-            "розетка дымит",
-            "дымит провод",
-            "провод дымит",
-            "дымит щит",
-            "оголённ провод",
-            "оголен провод",
-            "бьёт током",
-            "бьет током",
-            "ударило током",
-            "током бьёт",
-            "греется розет",
-            "плавится розет",
-            "оплав",
-            "проводка греет",
-            "выбило пробк",
-            "выбивает пробк",
-            "выбивает автомат",
-            "выбило автомат",
-            "нет света",
-            "погас свет",
-            "пропал свет",
-            "нет электричеств",
-            "пропало электричеств",
-        ),
-    ),
-    (
-        TYPE_PLUMBING,
-        (
-            "прорвало",
-            "прорвал",
-            "затоп",
-            "затопил",
-            "топит",
-            "протечк",
-            "протека",
-            "подтек",
-            "потекл",
-            "течь",
-            "течёт вода",
-            "течет вода",
-            "бойлер",
-            "хлещет вода",
-            "залива",
-            "залило",
-            "потоп",
-            "вода на полу",
-            "капает с потолка",
-            "лопнула труба",
-            "трубу прорвал",
-            "труба течёт",
-            "сорвало кран",
-            "сорвало смеситель",
-        ),
-    ),
-    (
-        TYPE_HEATING,
-        (
-            "нет отоплен",
-            "не греют батар",
-            "батареи холодн",
-            "холодные батар",
-            "еле тёплые батар",
-            "отопление не работа",
-            "не работает отоплен",
-            "отопление отключ",
-            "отопление пропал",
-            "не топят",
-            "не дают отоплен",
-            "холодно в квартир",
-            "замерзаем",
-        ),
-    ),
-    (
-        TYPE_SEWAGE,
-        (
-            "канализац",
-            "засор",
-            "забило унитаз",
-            "забилась раковин",
-            "унитаз переполн",
-            "вода не уходит",
-            "стоки не уходят",
-            "засорился слив",
-            "нечистот",
-        ),
-    ),
-    (TYPE_GENERIC, ("авария", "аварийн", "экстренн", "чрезвычайн")),
-)
+    entries: dict[str, PlaybookEntry]
+    triggers: tuple[tuple[str, tuple[str, ...]], ...]  # (тип, стеммы) в порядке приоритета
+    info_suppress: tuple[str, ...]
+    uk_with: str  # шаблон строки УК с телефоном ({contact})
+    uk_without: str  # обобщённая формулировка без телефона
 
-# Образовательный/справочный контекст — не авария, а вопрос (анти-ложные срабатывания).
-_INFO_SUPPRESS = (
-    "как оформ",
-    "как продл",
-    "что такое",
-    "что входит",
-    "что делать при",
-    "что делать в случае",
-    "как вести себя",
-    "правил",
-    "инструкц",
-    "расскаж",
-    "можно ли получ",
-    "для справки",
-    "на будущее",
-)
+
+def _parse(data: Any) -> _Playbook:
+    """Провалидировать JSON и собрать плейбук. Некорректная структура → ValueError."""
+    if not isinstance(data, dict):
+        raise ValueError("playbook root must be an object")
+    entries: dict[str, PlaybookEntry] = {}
+    triggers: list[tuple[str, tuple[str, ...]]] = []
+    for item in data["types"]:
+        type_ = str(item["type"])
+        mode = str(item["partner_mode"])
+        if mode not in _VALID_MODES:
+            raise ValueError(f"invalid partner_mode for {type_}: {mode}")
+        entries[type_] = PlaybookEntry(
+            type=type_,
+            scope=str(item["scope"]),
+            headline=str(item["headline"]),
+            steps=tuple(str(s) for s in item.get("steps", [])),
+            call_line=str(item["call_line"]),
+            contacts=tuple(str(c) for c in item["contacts"]),
+            partner_mode=mode,
+            repair_subcategory=str(item.get("repair_subcategory", "")),
+            partner_question=str(item.get("partner_question", "")),
+        )
+        triggers.append((type_, tuple(str(t).lower() for t in item.get("triggers", []))))
+    if not entries:
+        raise ValueError("playbook has no types")
+    uk = data.get("uk_line", {})
+    return _Playbook(
+        entries=entries,
+        triggers=tuple(triggers),
+        info_suppress=tuple(str(s) for s in data.get("info_suppress", [])),
+        uk_with=str(uk["with_contact"]),
+        uk_without=str(uk["without_contact"]),
+    )
+
+
+def load_playbook(path: str | None = None) -> _Playbook:
+    """Загрузить плейбук: из `path` (ops-override) либо из встроенного файла.
+
+    Битый override → предупреждение + откат на встроенный (FR-6.6). Битый встроенный →
+    исключение (fail-fast: аварийный модуль не должен «молча» остаться без правил).
+    """
+    if path:
+        try:
+            return _parse(json.loads(Path(path).read_text(encoding="utf-8")))
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            _logger.warning("emergency playbook override invalid (%s) → встроенный", exc)
+    return _parse(json.loads(_BUNDLED_PATH.read_text(encoding="utf-8")))
+
+
+_DATA = load_playbook(os.getenv(_OVERRIDE_ENV) or None)
+#: Карточки плейбука по типу (совместимость: используется в коде/тестах).
+PLAYBOOK: dict[str, PlaybookEntry] = _DATA.entries
 
 
 def classify_emergency(masked_text: str) -> str | None:
     """Определить тип аварии по тексту (rules, high recall). None — не авария.
 
-    Справочные/educational формулировки («что такое», «правила», «что делать при…») подавляются —
-    это вопрос, а не сообщение об аварии.
+    Справочные/educational формулировки (`info_suppress`) подавляются — это вопрос, а не
+    сообщение об аварии. Триггеры/подавление берутся из `playbook_data.json`.
     """
     text = masked_text.lower()
-    if any(s in text for s in _INFO_SUPPRESS):
+    if any(stem in text for stem in _DATA.info_suppress):
         return None
-    for type_, stems in _TRIGGERS:
+    for type_, stems in _DATA.triggers:
         if any(stem in text for stem in stems):
             return type_
     return None
@@ -399,20 +126,17 @@ def classify_emergency(masked_text: str) -> str | None:
 
 def entry_for(type_: str) -> PlaybookEntry | None:
     """Карточка плейбука по типу (None — нет)."""
-    return PLAYBOOK.get(type_)
+    return _DATA.entries.get(type_)
 
 
 def _uk_line(uk_contact: str | None) -> str:
-    if uk_contact:
-        return f"управляющая организация: {uk_contact}"
-    return "управляющая организация — телефон в вашем договоре или на стенде в подъезде"
+    return _DATA.uk_with.format(contact=uk_contact) if uk_contact else _DATA.uk_without
 
 
 def build_emergency_message(entry: PlaybookEntry, uk_contact: str | None) -> str:
     """Собрать конкретный, нешаблонный ответ: заголовок типа + пошаговые действия + кому звонить
-    + (если применимо) вопрос про заявку.
+    + (если применимо) вопрос про заявку. `uk_contact` — телефон УК из карточки (если есть).
 
-    `uk_contact` — телефон УК из карточки объекта (если есть); иначе обобщённая формулировка.
     Чистая функция (golden-тестируемо), без ПДн пользователя.
     """
     lines = [f"⚠️ {entry.headline}"]
