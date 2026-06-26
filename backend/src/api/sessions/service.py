@@ -286,10 +286,17 @@ class SessionService:
         # Снимок берётся ПОСЛЕ добавления user-реплики (autoflush в list_turns) — он
         # содержит текущий вопрос; коммит — общий с ходом (escalate_in_turn без commit).
         if loop_result is not None and loop_result.handoff:
-            await handoff_service.escalate_in_turn(
+            record = await handoff_service.escalate_in_turn(
                 session=session,
                 reason=loop_result.handoff_reason or AgentActionKind.HANDOFF.value,
                 correlation_id=correlation_id,
+            )
+            # #6: честный ETA + номер обращения в реплике (после заведения тикета).
+            ref = record.target_ref
+            num = f" Обращение №{ref}." if ref else ""
+            reply = (
+                f"Передаю ваше обращение специалисту.{num} "
+                f"Он ответит {self._settings.handoff_eta_text}."
             )
 
         agent_turn = AgentTurn(

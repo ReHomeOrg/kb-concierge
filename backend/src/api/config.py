@@ -141,6 +141,12 @@ class Settings(BaseSettings):
     )
     kb_partners_api_token: str = Field(default="", description="Fallback-токен kb-partners (dev).")
 
+    # Ожидаемое время ответа специалиста при эскалации (#6): в реплике handoff, чтобы
+    # пользователь знал срок. Текст, не критпуть — правится без кода.
+    handoff_eta_text: str = Field(
+        default="в течение 15 минут", description="ETA ответа специалиста (реплика handoff, #6)."
+    )
+
     # --- Dramatiq-воркер (durable исходящие события, фоновые задачи). ПУСТОЙ
     # broker_url → StubBroker, акторы инертны (broker/worker поднимает ops). ---
     worker_broker_url: str = Field(default="", description="Redis-broker Dramatiq. ПУСТО → Stub.")
