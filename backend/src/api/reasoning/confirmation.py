@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import enum
 
+from api.reasoning.replies import CONFIRM_NO, CONFIRM_YES
+
 
 class Confirmation(str, enum.Enum):
     YES = "YES"
@@ -16,46 +18,16 @@ class Confirmation(str, enum.Enum):
     UNCLEAR = "UNCLEAR"
 
 
-# Явные согласия/отказы. Сравнение по нормализованному тексту (короткие реплики).
-_YES = (
-    "да",
-    "подтвержда",
-    "подтверждаю",
-    "согла",
-    "оформляй",
-    "оформляйте",
-    "давай",
-    "давайте",
-    "ок",
-    "окей",
-    "хорошо",
-    "верно",
-    "поехали",
-    "запускай",
-)
-_NO = (
-    "нет",
-    "не надо",
-    "не нужно",
-    "отмен",
-    "откажусь",
-    "отказ",
-    "стоп",
-    "погоди",
-    "передума",
-    "не хочу",
-)
-
-
 def detect_confirmation(masked_text: str) -> Confirmation:
     """Классифицировать реплику как согласие/отказ/неясно (FR-7.4).
 
     Отказ имеет приоритет над согласием (если в реплике оба сигнала — безопаснее
     НЕ исполнять). Нет явного сигнала → `UNCLEAR` (переспросить, не действовать).
+    Ключевые слова согласия/отказа — из конфига (`replies_data.json`).
     """
     text = masked_text.lower().strip()
-    has_no = any(n in text for n in _NO)
-    has_yes = any(_token_match(text, y) for y in _YES)
+    has_no = any(n in text for n in CONFIRM_NO)
+    has_yes = any(_token_match(text, y) for y in CONFIRM_YES)
     if has_no:
         return Confirmation.NO
     if has_yes:

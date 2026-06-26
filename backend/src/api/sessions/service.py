@@ -41,6 +41,7 @@ from api.policy.enums import AgentActionKind, DecisionReason
 from api.policy.service import PolicyService
 from api.reasoning.confirmation import Confirmation, detect_confirmation
 from api.reasoning.loop import LoopResult, ReasoningLoop
+from api.reasoning.replies import REPLIES
 from api.sessions.access import can_access, resolve_owner
 from api.sessions.enums import AuditAction, SessionStatus, TurnRole
 from api.sessions.models import AgentSession, AgentTurn
@@ -50,9 +51,9 @@ from api.webhooks import events
 
 # Ответ хода при деградации распознавания (намерение не определено, FR-6.6).
 _DEGRADED_REPLY = "Принял ваше сообщение, обрабатываю запрос."
-# Ответы разрешения подтверждения (FR-7.4).
-_DECLINE_REPLY = "Хорошо, отменил. Если понадобится — обращайтесь."
-_REASK_REPLY = "Нужно ваше подтверждение: оформляем заявку? Ответьте «да» или «нет»."
+# Ответы разрешения подтверждения (FR-7.4) — из конфига (replies_data.json).
+_DECLINE_REPLY = REPLIES["decline"]
+_REASK_REPLY = REPLIES["reask"]
 # Уверенность собранной заявки на шаге подтверждения (не low-confidence; §1).
 _ORDER_READY_CONFIDENCE = 0.9
 _PARTNER_SERVICE_VALUE = Intent.PARTNER_SERVICE.value
