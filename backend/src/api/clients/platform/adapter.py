@@ -63,6 +63,7 @@ def _to_context(user_id: str, payload: Any) -> UserContext:
             premises_id=str(p.get("id", "")),
             address=p.get("address"),
             kind=p.get("kind"),
+            management_contact=p.get("management_contact"),  # телефон УК (для аварий)
         )
         for p in (payload.get("premises") or [])
         if isinstance(p, dict)

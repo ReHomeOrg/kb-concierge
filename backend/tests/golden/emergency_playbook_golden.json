@@ -1,0 +1,17 @@
+[
+  {"text": "воняет газом", "type": "GAS", "partner_mode": "OFFER"},
+  {"text": "запах газа в подъезде", "type": "GAS", "partner_mode": "OFFER"},
+  {"text": "пожар!", "type": "FIRE", "partner_mode": "NONE"},
+  {"text": "сильное задымление", "type": "FIRE", "partner_mode": "NONE"},
+  {"text": "застряли в лифте", "type": "ELEVATOR", "partner_mode": "NONE"},
+  {"text": "лифт не работает", "type": "ELEVATOR", "partner_mode": "NONE"},
+  {"text": "бойлер течёт на пол", "type": "PLUMBING", "partner_mode": "CREATE"},
+  {"text": "прорвало трубу", "type": "PLUMBING", "partner_mode": "CREATE"},
+  {"text": "розетка дымит", "type": "ELECTRICAL", "partner_mode": "CREATE"},
+  {"text": "короткое замыкание", "type": "ELECTRICAL", "partner_mode": "CREATE"},
+  {"text": "нет отопления", "type": "HEATING", "partner_mode": "OFFER"},
+  {"text": "засор канализации", "type": "SEWAGE", "partner_mode": "OFFER"},
+  {"text": "у нас авария", "type": "GENERIC", "partner_mode": "OFFER"},
+  {"text": "нужна уборка квартиры", "type": null, "partner_mode": null},
+  {"text": "как оформить заявку", "type": null, "partner_mode": null}
+]

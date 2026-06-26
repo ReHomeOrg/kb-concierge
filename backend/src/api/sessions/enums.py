@@ -57,6 +57,7 @@ class AuditAction(str, enum.Enum):
     CONFIRMATION_REQUESTED = "CONFIRM_REQUESTED"  # §7.4: запрошено подтверждение (M7)
     ACTION_TAKEN = "ACTION_TAKEN"  # §6.1: исполнено write-действие после согласия (M7)
     ORDER_FIELD_REQUESTED = "ORDER_FIELD_REQUESTED"  # R1: запрошено обязательное поле заявки
+    EMERGENCY_DETECTED = "EMERGENCY_DETECTED"  # авария: распознана ситуация, выдан плейбук
     AGENT_RESPONDED = "AGENT_RESPONDED"
     HANDOFF_CREATED = "HANDOFF_CREATED"  # §7.3: эскалация человеку в kb-support (M6, FR-7.1)
     OPERATOR_REPLIED = "OPERATOR_REPLIED"  # §7.3: ответ оператора возвращён в диалог (M6, FR-7.2)

@@ -45,6 +45,11 @@ AGENT_ORDER_MISSING_FIELDS = Counter(
     "Запрошенные обязательные поля заявки (R1/§3)",
     ["category", "field"],
 )
+AGENT_EMERGENCY = Counter(
+    "agent_emergency_total",
+    "Распознанные аварийные ситуации (плейбук): тип + режим партнёрской заявки",
+    ["type", "partner_mode"],
+)
 
 
 def record_intent(intent: str, method: str) -> None:
@@ -77,3 +82,8 @@ def record_order_step(category: str, action: str) -> None:
 def record_order_missing_field(category: str, field: str) -> None:
     """Запрос обязательного поля заявки (R1). Лейбл `field` — ключ из §3, не значение."""
     AGENT_ORDER_MISSING_FIELDS.labels(category=category, field=field).inc()
+
+
+def record_emergency(type_: str, partner_mode: str) -> None:
+    """Распознанная авария. Лейблы — только enum типа/режима (низкая кардинальность, G3)."""
+    AGENT_EMERGENCY.labels(type=type_, partner_mode=partner_mode).inc()
