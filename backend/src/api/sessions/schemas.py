@@ -55,6 +55,13 @@ class ProposedActionOut(BaseModel):
     address: str | None = None
 
 
+class OptionOut(BaseModel):
+    """Тапаемый вариант ответа для UI (#10): id + подпись."""
+
+    id: str
+    label: str
+
+
 class TurnRead(BaseModel):
     """Реплика диалога в ответе API (видна владельцу/оператору)."""
 
@@ -69,6 +76,7 @@ class TurnRead(BaseModel):
     citations: list[CitationOut] = Field(default_factory=list)
     awaiting_confirmation: bool = False
     summary: ProposedActionOut | None = None
+    options: list[OptionOut] = Field(default_factory=list)
 
     @classmethod
     def from_orm_turn(cls, turn: AgentTurn) -> TurnRead:

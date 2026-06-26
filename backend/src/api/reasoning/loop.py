@@ -22,7 +22,16 @@ from api.tools.base import ToolContext
 from api.tools.registry import ToolRegistry
 
 _HANDOFF_REPLY = "Передаю ваше обращение специалисту — он скоро подключится."
-_CLARIFY_REPLY = "Уточните, пожалуйста, детали запроса, чтобы я направил его верно."
+_CLARIFY_REPLY = (
+    "Уточните, пожалуйста, запрос — или выберите, что нужно:"
+)
+# Умный CLARIFY (#10): вместо тупика — тапаемые варианты основных сценариев.
+_CLARIFY_OPTIONS: list[dict[str, str]] = [
+    {"id": "info", "label": "Задать вопрос по базе знаний"},
+    {"id": "order", "label": "Оформить заявку (уборка/переезд/ремонт)"},
+    {"id": "status", "label": "Узнать статус заявки"},
+    {"id": "operator", "label": "Связаться со специалистом"},
+]
 _CONFIRM_REPLY = "Подготовил заявку. Подтвердите — и я передам её в работу."
 _PENDING_REPLY = "Принял, передаю запрос в обработку."
 _SMALL_TALK_REPLY = "Рад помочь! Чем могу быть полезен?"
@@ -113,6 +122,9 @@ class LoopResult:
     # fields, address}. Транзитная — отдаётся в ответе хода, в БД не персистится. None,
     # если сводки нет (не предложение заявки).
     summary: dict[str, Any] | None = None
+    # Тапаемые варианты ответа для UI (#10): [{id, label}]. Транзитные. Пусто, если
+    # вариантов нет (обычный ответ). Заполняются для умного CLARIFY.
+    options: list[dict[str, str]] = field(default_factory=list)
 
     def to_trace(self) -> dict[str, Any]:
         return {
@@ -152,7 +164,8 @@ class ReasoningLoop:
                 reply=_HANDOFF_REPLY, handoff=True, handoff_reason=decision.reason.value
             )
         if decision.outcome is AgentActionKind.CLARIFY:
-            return LoopResult(reply=_CLARIFY_REPLY)
+            # Умный CLARIFY (#10): уточнение + тапаемые варианты сценариев, не тупик.
+            return LoopResult(reply=_CLARIFY_REPLY, options=list(_CLARIFY_OPTIONS))
         if decision.outcome is AgentActionKind.TOOL_CALL:
             return await self._handle_tool_call(decision, intent, query_masked, context, confirmed)
         # ANSWER

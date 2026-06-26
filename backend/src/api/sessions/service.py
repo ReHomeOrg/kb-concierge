@@ -35,11 +35,12 @@ from api.orders import (
     extract_fields,
     missing_fields,
     prompt_for,
+    required_keys,
 )
 from api.policy.engine import PolicyDecision
 from api.policy.enums import AgentActionKind, DecisionReason
 from api.policy.service import PolicyService
-from api.reasoning.confirmation import Confirmation, detect_confirmation
+from api.reasoning.confirmation import Confirmation, detect_confirmation, detect_edit
 from api.reasoning.loop import LoopResult, ReasoningLoop
 from api.sessions.access import can_access, resolve_owner
 from api.sessions.enums import AuditAction, SessionStatus, TurnRole
@@ -58,6 +59,19 @@ _ORDER_READY_CONFIDENCE = 0.9
 _PARTNER_SERVICE_VALUE = Intent.PARTNER_SERVICE.value
 # Фолбэк-вопрос, если для поля не нашёлся текст (защитный; обычно не достигается).
 _FIELD_FALLBACK_REPLY = "Уточните, пожалуйста, детали заявки."
+# Человекочитаемые метки обязательных полей §3 (для вопроса «что изменить?», #9).
+_FIELD_LABELS: dict[str, str] = {
+    "cleaning_type": "тип уборки",
+    "area_or_rooms": "площадь/комнаты",
+    "datetime": "дата и время",
+    "city": "город",
+    "volume": "объём",
+    "floors_elevators": "этаж и лифт",
+    "movers_packing": "грузчики/упаковка",
+    "subcategory": "вид работ",
+    "problem_description": "описание",
+    "access": "доступ",
+}
 
 
 @dataclass
@@ -73,6 +87,8 @@ class PostedTurn:
     awaiting_confirmation: bool = False
     # Структурная сводка предлагаемого действия (#7): {kind, category, fields, address}.
     summary: dict[str, Any] | None = None
+    # Тапаемые варианты ответа (#10): [{id, label}]. Пусто, если вариантов нет.
+    options: list[dict[str, str]] = field(default_factory=list)
 
 
 def _action_kind(loop_result: LoopResult, outcome: AgentActionKind) -> str:
@@ -301,6 +317,7 @@ class SessionService:
                 loop_result.awaiting_confirmation if loop_result is not None else False
             ),
             summary=loop_result.summary if loop_result is not None else None,
+            options=loop_result.options if loop_result is not None else [],
         )
 
     def _emit_action_event(
@@ -394,13 +411,21 @@ class SessionService:
             self._emit_action_event(session, outcome.intent.value, kind, corr)
 
         if loop_result.awaiting_confirmation:
-            session.pending_action = {
+            pending: dict[str, Any] = {
                 "tools": list(decision.allowed_tools),
                 "intent": outcome.intent.value,
                 "query_masked": masked,  # маскированный (G3)
                 "policy_version": decision.policy_version,
                 "reason": decision.reason.value,
             }
+            # Контекст для правки до подтверждения (#9), если заявка с известной категорией.
+            if category in ORDER_CATEGORIES:
+                pending["order"] = {
+                    "category": category,
+                    "answers": extract_fields(category, masked),
+                    "original_masked": masked,
+                }
+            session.pending_action = pending
             record_confirmation("requested")
             extra_audits.append(
                 (
@@ -523,6 +548,12 @@ class SessionService:
                 "query_masked": raw_input,  # маскированный полный текст (G3)
                 "policy_version": decision.policy_version,
                 "reason": decision.reason.value,
+                # Контекст для правки до подтверждения (#9): пересобрать flow_state.
+                "order": {
+                    "category": category,
+                    "answers": answers,
+                    "original_masked": original,
+                },
             }
             record_confirmation("requested")
             extra_audits.append(
@@ -562,6 +593,44 @@ class SessionService:
             "address": address,
         }
 
+    def _reopen_for_edit(
+        self,
+        session: AgentSession,
+        order: dict[str, Any],
+        edit_field: str,
+        user_turn: AgentTurn,
+        extra_audits: list[tuple[str, str | None, str | None]],
+    ) -> tuple[str, LoopResult | None]:
+        """Вернуться к правке поля заявки до подтверждения (#9), сохранив прочие ответы.
+
+        Известное поле → очищаем его и переспрашиваем (остальные ответы сохранены),
+        сбор продолжится и заявка пере-предложится. Поле не распознано → спрашиваем, что
+        именно изменить (pending сохраняется). Действие НЕ исполняется (FR-7.4).
+        """
+        category = str(order.get("category", ""))
+        answers: dict[str, str] = dict(order.get("answers") or {})
+        original = str(order.get("original_masked", ""))
+        user_turn.intent = _PARTNER_SERVICE_VALUE
+        record_action("clarify")
+
+        if edit_field and edit_field in required_keys(category):
+            answers.pop(edit_field, None)  # переспросим именно его
+            session.flow_state = {
+                "category": category,
+                "answers": answers,
+                "asking": edit_field,
+                "original_masked": original,
+            }
+            session.pending_action = None  # вышли из гейта подтверждения в сбор
+            user_turn.intent_trace = {"edit": {"field": edit_field}}
+            extra_audits.append((AuditAction.ORDER_FIELD_REQUESTED.value, category, edit_field))
+            return prompt_for(category, edit_field) or _FIELD_FALLBACK_REPLY, None
+
+        # Не поняли, что менять → спрашиваем (pending сохраняется, действие не исполняется).
+        user_turn.intent_trace = {"edit": {"field": None}}
+        labels = ", ".join(_FIELD_LABELS.get(k, k) for k in required_keys(category))
+        return f"Что изменить? Можно поправить: {labels}.", None
+
     async def _resolve_pending(
         self,
         session: AgentSession,
@@ -574,6 +643,13 @@ class SessionService:
         """Разрешить ожидающее подтверждение (FR-7.4): согласие → исполнить, отказ →
         отменить, неясно → переспросить (детерминированно, не LLM; G6)."""
         pending: dict[str, Any] = session.pending_action or {}
+        # Правка собранной заявки до подтверждения (#9): вернуться к нужному полю, не
+        # отменяя весь сбор. Проверяем ДО согласия (приоритет «исправить» над «да»).
+        order = pending.get("order")
+        if isinstance(order, dict):
+            edit_field = detect_edit(masked)
+            if edit_field is not None:
+                return self._reopen_for_edit(session, order, edit_field, user_turn, extra_audits)
         verdict = detect_confirmation(masked)
         record_confirmation(verdict.value.lower())  # yes/no/unclear (§7.4, M8)
         trace: dict[str, Any] = {

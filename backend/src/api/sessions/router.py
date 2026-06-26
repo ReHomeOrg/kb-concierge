@@ -26,6 +26,7 @@ from api.sessions.ratelimit import RateLimiter
 from api.sessions.schemas import (
     CitationOut,
     MessageCreate,
+    OptionOut,
     ProposedActionOut,
     SessionCreate,
     SessionRead,
@@ -106,6 +107,11 @@ async def post_message_endpoint(
             fields={str(k): str(v) for k, v in (posted.summary.get("fields") or {}).items()},
             address=posted.summary.get("address"),
         )
+    turn.options = [
+        OptionOut(id=str(o.get("id", "")), label=str(o.get("label", "")))
+        for o in posted.options
+        if o.get("label")
+    ]
     return turn
 
 
