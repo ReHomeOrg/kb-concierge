@@ -8,6 +8,7 @@ LLM вне него (NFR-10). При неоднозначности → `UNCLEAR
 from __future__ import annotations
 
 import enum
+import re
 
 
 class Confirmation(str, enum.Enum):
@@ -64,7 +65,11 @@ def detect_confirmation(masked_text: str) -> Confirmation:
 
 
 def _token_match(text: str, needle: str) -> bool:
-    """Короткие согласия («да»/«ок») — только как отдельное слово (анти-ложные «удача»)."""
+    """Короткие согласия («да»/«ок») — только как отдельное слово (анти-ложные «удача»).
+
+    Граница слова с учётом пунктуации: «да!», «да.», «да,», «ок!» распознаются, а «удача»/
+    «правда» — нет (соседний символ — буква/цифра). Длинные стеммы — обычная подстрока.
+    """
     if len(needle) <= 2:
-        return text == needle or text.startswith(needle + " ") or text.endswith(" " + needle)
+        return re.search(rf"(?<!\w){re.escape(needle)}(?!\w)", text) is not None
     return needle in text
