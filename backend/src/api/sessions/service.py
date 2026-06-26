@@ -71,6 +71,8 @@ class PostedTurn:
     turn: AgentTurn
     citations: list[dict[str, Any]] = field(default_factory=list)
     awaiting_confirmation: bool = False
+    # Структурная сводка предлагаемого действия (#7): {kind, category, fields, address}.
+    summary: dict[str, Any] | None = None
 
 
 def _action_kind(loop_result: LoopResult, outcome: AgentActionKind) -> str:
@@ -298,6 +300,7 @@ class SessionService:
             awaiting_confirmation=(
                 loop_result.awaiting_confirmation if loop_result is not None else False
             ),
+            summary=loop_result.summary if loop_result is not None else None,
         )
 
     def _emit_action_event(
@@ -405,6 +408,15 @@ class SessionService:
                     outcome.intent.value,
                     decision.reason.value,
                 )
+            )
+        # Сводка-квитанция предложения (#7) для заявки, собранной из одной реплики (#1/#2).
+        if outcome.intent is Intent.PARTNER_SERVICE:
+            await self._attach_order_summary(
+                loop_result,
+                category,
+                extract_fields(category, masked) if category in ORDER_CATEGORIES else {},
+                tool_context,
+                reasoning_loop,
             )
         return loop_result.reply, loop_result
 
@@ -520,7 +532,35 @@ class SessionService:
                     decision.reason.value,
                 )
             )
+        # Сводка-квитанция предложения (#7) + адрес из карточки (#1).
+        await self._attach_order_summary(
+            loop_result, category, answers, tool_context, reasoning_loop
+        )
         return loop_result.reply, loop_result
+
+    async def _attach_order_summary(
+        self,
+        loop_result: LoopResult,
+        category: str,
+        answers: dict[str, str],
+        tool_context: ToolContext,
+        reasoning_loop: ReasoningLoop,
+    ) -> None:
+        """Прикрепить к ходу структурную сводку заявки (#7) + адрес из карточки (#1).
+
+        Только для предложения партнёрской заявки (`awaiting_confirmation`) с известной
+        категорией: фронт рисует карточку «что оформляем». Адрес — read-only из
+        platform.get_context (деградация → без адреса, FR-6.6). Поля — маскированы (G3).
+        """
+        if not loop_result.awaiting_confirmation or category not in ORDER_CATEGORIES:
+            return
+        address = await reasoning_loop.fetch_address(tool_context)
+        loop_result.summary = {
+            "kind": "partner_request",
+            "category": category,
+            "fields": dict(answers),
+            "address": address,
+        }
 
     async def _resolve_pending(
         self,

@@ -50,3 +50,17 @@ def test_extract_repair_subcategory_and_description() -> None:
 def test_prompt_for_known_and_unknown() -> None:
     assert prompt_for("CLEANING", "datetime") is not None
     assert prompt_for("CLEANING", "nope") is None
+
+
+def test_extract_datetime_from_single_message() -> None:
+    # #2: дата/время вытаскивается из реплики, чтобы не задавать лишний вопрос.
+    assert extract_fields("CLEANING", "уборка генеральная завтра")["datetime"] == "завтра"
+    assert extract_fields("REPAIR", "сантехника сегодня")["datetime"] == "сегодня"
+    assert "субботу" in extract_fields("MOVING", "переезд в субботу")["datetime"]
+    assert extract_fields("CLEANING", "уборка 25.06")["datetime"] == "25.06"
+    assert extract_fields("CLEANING", "уборка в 14:00")["datetime"] == "14:00"
+
+
+def test_extract_datetime_absent_when_no_token() -> None:
+    # Консервативно: без явного временного токена поле добирается вопросом.
+    assert "datetime" not in extract_fields("CLEANING", "нужна генеральная уборка")

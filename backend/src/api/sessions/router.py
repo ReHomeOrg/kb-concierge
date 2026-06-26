@@ -26,6 +26,7 @@ from api.sessions.ratelimit import RateLimiter
 from api.sessions.schemas import (
     CitationOut,
     MessageCreate,
+    ProposedActionOut,
     SessionCreate,
     SessionRead,
     TurnRead,
@@ -98,6 +99,13 @@ async def post_message_endpoint(
         if c.get("title")
     ]
     turn.awaiting_confirmation = posted.awaiting_confirmation
+    if posted.summary is not None:
+        turn.summary = ProposedActionOut(
+            kind=str(posted.summary.get("kind", "")),
+            category=posted.summary.get("category"),
+            fields={str(k): str(v) for k, v in (posted.summary.get("fields") or {}).items()},
+            address=posted.summary.get("address"),
+        )
     return turn
 
 

@@ -34,6 +34,7 @@ _NO_ANSWER_REPLY = (
 
 _KB_SEARCH = "kb.search"
 _KB_ANSWER = "kb.answer"
+_PLATFORM_GET_CONTEXT = "platform.get_context"
 _PARTNERS_CREATE = "partners.create_request"
 _PARTNERS_CLASSIFY = "partners.classify"
 _PARTNERS_DISPATCH = "partners.dispatch"
@@ -108,6 +109,10 @@ class LoopResult:
     # support_ticket_id, support_number}. Сервис кладёт их в `session.last_refs`, чтобы
     # потом отвечать на «что с моей заявкой?» (read-only get_status). Без ПДн (G3).
     created_refs: dict[str, Any] = field(default_factory=dict)
+    # Структурная сводка предлагаемого действия для карточки в UI (#7): {kind, category,
+    # fields, address}. Транзитная — отдаётся в ответе хода, в БД не персистится. None,
+    # если сводки нет (не предложение заявки).
+    summary: dict[str, Any] | None = None
 
     def to_trace(self) -> dict[str, Any]:
         return {
@@ -168,6 +173,27 @@ class ReasoningLoop:
         if intent is Intent.OUT_OF_SCOPE:
             return LoopResult(reply=_OUT_OF_SCOPE_REPLY)
         return LoopResult(reply=_DEFAULT_REPLY)
+
+    async def fetch_address(self, context: ToolContext) -> str | None:
+        """Адрес ЕДИНСТВЕННОГО объекта пользователя из карточки (#1, read-only).
+
+        Для предзаполнения сводки заявки (не спрашивать известное). Деградация (нет
+        инструмента/делегирования/несколько или ноль объектов/недоступность) → None
+        (FR-6.6): сводка просто без адреса. Без ПДн пользователя (только адрес объекта).
+        """
+        if context.on_behalf_of is None or self._registry.get(_PLATFORM_GET_CONTEXT) is None:
+            return None
+        try:
+            result = await self._registry.call(_PLATFORM_GET_CONTEXT, {}, context)
+        except Exception:
+            return None
+        if result.unavailable:
+            return None
+        premises = result.data.get("premises") or []
+        if len(premises) == 1 and isinstance(premises[0], dict):
+            address = premises[0].get("address")
+            return str(address) if address else None
+        return None
 
     async def _run_status_query(
         self, decision: PolicyDecision, context: ToolContext, refs: dict[str, Any]

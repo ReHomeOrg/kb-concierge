@@ -41,6 +41,20 @@ class CitationOut(BaseModel):
     url: str | None = None
 
 
+class ProposedActionOut(BaseModel):
+    """Структурная сводка предлагаемого действия (#7): карточка «что оформляем».
+
+    `kind` — вид (partner_request); `category` — категория услуги; `fields` — собранные
+    обязательные поля §3 (маскированы, G3); `address` — адрес объекта из карточки (#1),
+    None если недоступен. Транзитная: отдаётся в ответе хода, в БД не персистится.
+    """
+
+    kind: str
+    category: str | None = None
+    fields: dict[str, str] = Field(default_factory=dict)
+    address: str | None = None
+
+
 class TurnRead(BaseModel):
     """Реплика диалога в ответе API (видна владельцу/оператору)."""
 
@@ -50,10 +64,11 @@ class TurnRead(BaseModel):
     intent: str | None = None
     confidence: float | None = None
     ts: datetime.datetime
-    # Транзитные поля хода (не из БД): структурные цитаты ответа KB и признак
-    # ожидания подтверждения write-действия (FR-7.4). Пустые для истории сессии.
+    # Транзитные поля хода (не из БД): структурные цитаты ответа KB, признак ожидания
+    # подтверждения write-действия (FR-7.4) и сводка предложения (#7). Пустые для истории.
     citations: list[CitationOut] = Field(default_factory=list)
     awaiting_confirmation: bool = False
+    summary: ProposedActionOut | None = None
 
     @classmethod
     def from_orm_turn(cls, turn: AgentTurn) -> TurnRead:
