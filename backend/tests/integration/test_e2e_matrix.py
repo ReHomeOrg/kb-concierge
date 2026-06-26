@@ -298,21 +298,24 @@ async def test_pii_masked_persisted(
 # ---------- Пробы подозрительных нестыковок ----------
 
 
-async def test_signal_during_slot_filling_not_escalated(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+@pytest.mark.parametrize(
+    "msg",
+    ["верните деньги, ужасный сервис", "хочу подать претензию", "отмените всё"],
+)
+async def test_signal_during_slot_filling_escalates(
+    msg: str, make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
     session: AsyncSession,
 ) -> None:
-    """ПРОБА: стоп-сигнал (деньги/претензия) ВНУТРИ сбора полей §3 не пере-проверяется —
-    реплика становится ответом на поле, эскалации нет. Фиксируем текущее поведение (flagged)."""
+    """ФИКС: стоп-сигнал (деньги/претензия/необратимое) ВНУТРИ сбора полей §3 прерывает сбор
+    и эскалирует (G6, safety-first) — жалоба посреди оформления не теряется."""
     create = _ok("partners.create_request", request_id="r")
     _override(create)
     sess, client = await _start(make_principal, seed_session, make_client)
     await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": "нужна уборка генеральная"})
-    # Идёт сбор полей; вместо площади пользователь пишет претензию.
-    r = await client.post(
-        f"{_MSGS}/{sess.id}/messages", json={"content": "верните деньги, ужасный сервис"}
-    )
     await session.refresh(sess)
-    # Текущее: остаёмся в сборе полей (claim не эскалирован). Если станет escalate — обновить.
-    assert sess.flow_state is not None
-    assert "специалист" not in r.json()["content"].lower()
+    assert sess.flow_state is not None  # идёт сбор полей
+    r = await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": msg})
+    await session.refresh(sess)
+    assert "специалист" in r.json()["content"].lower()  # эскалировали
+    assert sess.flow_state is None  # сбор прерван
+    assert create.calls == []

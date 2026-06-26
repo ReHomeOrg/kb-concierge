@@ -538,6 +538,30 @@ class SessionService:
         original = str(flow.get("original_masked", ""))
         user_turn.intent = _PARTNER_SERVICE_VALUE
 
+        # Стоп-сигнал ВНУТРИ сбора полей (претензия/деньги/необратимое) — прервать сбор и
+        # эскалировать (G6, safety-first): жалоба посреди оформления не должна теряться.
+        interrupt = self._policy.decide(Intent.PARTNER_SERVICE, _ORDER_READY_CONFIDENCE, masked)
+        if interrupt.outcome is AgentActionKind.HANDOFF:
+            session.flow_state = None
+            loop_result = await reasoning_loop.run(
+                decision=interrupt,
+                intent=Intent.PARTNER_SERVICE,
+                query_masked=masked,
+                context=tool_context,
+                confirmed=False,
+            )
+            user_turn.intent_trace = {
+                "order": {"interrupted": interrupt.reason.value},
+                "policy": interrupt.to_trace(),
+                "loop": loop_result.to_trace(),
+            }
+            record_policy(interrupt.outcome.value, interrupt.reason.value)
+            record_action(_action_kind(loop_result, interrupt.outcome))
+            extra_audits.append(
+                (AuditAction.POLICY_DECISION.value, interrupt.outcome.value, interrupt.reason.value)
+            )
+            return loop_result.reply, loop_result
+
         for key, value in extract_fields(category, masked).items():
             answers.setdefault(key, value)
         if isinstance(asking, str) and not answers.get(asking):
