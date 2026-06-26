@@ -37,6 +37,7 @@ _PARTNERS_CREATE = "partners.create_request"
 _PARTNERS_CLASSIFY = "partners.classify"
 _PARTNERS_DISPATCH = "partners.dispatch"
 _SUPPORT_CREATE = "support.create_ticket"
+_SUPPORT_ADD_MESSAGE = "support.add_message"
 
 # FR-7.4: предложение платного/необратимого действия + запрос явного согласия.
 _PROPOSE_PARTNER_REPLY = (
@@ -165,6 +166,25 @@ class ReasoningLoop:
         if intent is Intent.SUPPORT_ISSUE:
             return await self._run_support_issue(decision, query_masked, context)
         return LoopResult(reply=_PENDING_REPLY)
+
+    async def forward_to_ticket(
+        self, ticket_id: str, body_masked: str, context: ToolContext
+    ) -> bool:
+        """Переслать ВНЕШНЕЕ сообщение пользователя в тикет (support.add_message) после эскалации.
+
+        Инструмент не подключён (config-gated) / сосед недоступен / сбой → False (деградация
+        FR-6.6, реплику не теряем — её сохраняет сервис). `body_masked` уже маскирован (G3),
+        делегирование прав пользователя — через `context` (G7). is_internal=False на адаптере.
+        """
+        if self._registry.get(_SUPPORT_ADD_MESSAGE) is None:
+            return False
+        try:
+            result = await self._registry.call(
+                _SUPPORT_ADD_MESSAGE, {"ticket_id": ticket_id, "body": body_masked}, context
+            )
+        except Exception:
+            return False
+        return not result.unavailable
 
     async def _call_tool(
         self, name: str, payload: dict[str, Any], context: ToolContext

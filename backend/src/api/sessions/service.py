@@ -58,6 +58,12 @@ _ORDER_READY_CONFIDENCE = 0.9
 _PARTNER_SERVICE_VALUE = Intent.PARTNER_SERVICE.value
 # Фолбэк-вопрос, если для поля не нашёлся текст (защитный; обычно не достигается).
 _FIELD_FALLBACK_REPLY = "Уточните, пожалуйста, детали заявки."
+# Пересылка реплики пользователя в тикет после эскалации (диалог у специалиста).
+_FORWARDED_REPLY = "Передал ваше сообщение специалисту — он ответит здесь."
+_FORWARD_PENDING_REPLY = (
+    "Ваше обращение уже у специалиста. Не получилось передать дополнение прямо сейчас — "
+    "попробуйте чуть позже, либо дождитесь ответа."
+)
 
 
 @dataclass
@@ -189,6 +195,13 @@ class SessionService:
         session = await self._repo.get_for_update(session_id)
         if session is None or not can_access(principal, session):
             raise ProblemException.not_found(detail="Session not found")
+        if session.status is SessionStatus.HANDED_OFF:
+            # Диалог у специалиста: реплику пользователя НЕ гоняем через агента, а
+            # пересылаем в тикет внешним сообщением (support.add_message). Пользователь
+            # не блокируется 409 (UX-фикс).
+            return await self._forward_to_operator(
+                session, principal, content, correlation_id, reasoning_loop, handoff_service
+            )
         if session.status is not SessionStatus.ACTIVE:
             raise ProblemException.conflict(detail="Session is not active")
 
@@ -292,6 +305,79 @@ class SessionService:
                 loop_result.awaiting_confirmation if loop_result is not None else False
             ),
         )
+
+    async def _forward_to_operator(
+        self,
+        session: AgentSession,
+        principal: Principal,
+        content: str,
+        correlation_id: str | None,
+        reasoning_loop: ReasoningLoop,
+        handoff_service: HandoffService,
+    ) -> PostedTurn:
+        """Переслать реплику пользователя в тикет после эскалации (диалог у специалиста).
+
+        Сессия HANDED_OFF: агент не отвечает, сообщение уходит ВНЕШНИМ сообщением в тикет
+        kb-support (`support.add_message`, on-behalf-of пользователя G7, маскировано G3).
+        Нет активной эскалации/тикета или сосед недоступен → деградация (FR-6.6): сообщение
+        сохранено, ответ — «передам позже». Пользователь больше не блокируется 409.
+        """
+        base_ts = self._repo.now()
+        masked = mask_pii(content)
+        user_turn = AgentTurn(
+            session_id=session.id,
+            role=TurnRole.USER,
+            content=content,
+            content_masked=masked,
+            correlation_id=correlation_id,
+            ts=base_ts,
+        )
+        self._repo.add_turn(user_turn)
+        self._repo.add_audit(
+            session_id=session.id,
+            actor_id=_audit_actor(principal),
+            action=AuditAction.MESSAGE_RECEIVED.value,
+            correlation_id=correlation_id,
+        )
+
+        ticket_ref = await handoff_service.active_ticket_ref(session.id)
+        forwarded = False
+        if ticket_ref:
+            context = ToolContext(
+                on_behalf_of=session.user_id,
+                correlation_id=correlation_id,
+                session_id=str(session.id),
+            )
+            forwarded = await reasoning_loop.forward_to_ticket(ticket_ref, masked, context)
+        if forwarded:
+            self._repo.add_audit(
+                session_id=session.id,
+                actor_id=AGENT_ACTOR_ID,
+                action=AuditAction.TOOL_CALLED.value,
+                from_value="ok",
+                to_value="support.add_message",
+                correlation_id=correlation_id,
+            )
+
+        reply = _FORWARDED_REPLY if forwarded else _FORWARD_PENDING_REPLY
+        agent_turn = AgentTurn(
+            session_id=session.id,
+            role=TurnRole.AGENT,
+            content=reply,
+            content_masked=reply,
+            correlation_id=correlation_id,
+            ts=base_ts + datetime.timedelta(milliseconds=1),
+        )
+        self._repo.add_turn(agent_turn)
+        self._repo.add_audit(
+            session_id=session.id,
+            actor_id=AGENT_ACTOR_ID,
+            action=AuditAction.AGENT_RESPONDED.value,
+            correlation_id=correlation_id,
+        )
+        await self._repo.flush_refresh(agent_turn)
+        await self._repo.commit()
+        return PostedTurn(turn=agent_turn)
 
     def _emit_action_event(
         self, session: AgentSession, intent: str, kind: str, correlation_id: str | None
@@ -451,6 +537,30 @@ class SessionService:
         asking = flow.get("asking")
         original = str(flow.get("original_masked", ""))
         user_turn.intent = _PARTNER_SERVICE_VALUE
+
+        # Стоп-сигнал ВНУТРИ сбора полей (претензия/деньги/необратимое) — прервать сбор и
+        # эскалировать (G6, safety-first): жалоба посреди оформления не должна теряться.
+        interrupt = self._policy.decide(Intent.PARTNER_SERVICE, _ORDER_READY_CONFIDENCE, masked)
+        if interrupt.outcome is AgentActionKind.HANDOFF:
+            session.flow_state = None
+            loop_result = await reasoning_loop.run(
+                decision=interrupt,
+                intent=Intent.PARTNER_SERVICE,
+                query_masked=masked,
+                context=tool_context,
+                confirmed=False,
+            )
+            user_turn.intent_trace = {
+                "order": {"interrupted": interrupt.reason.value},
+                "policy": interrupt.to_trace(),
+                "loop": loop_result.to_trace(),
+            }
+            record_policy(interrupt.outcome.value, interrupt.reason.value)
+            record_action(_action_kind(loop_result, interrupt.outcome))
+            extra_audits.append(
+                (AuditAction.POLICY_DECISION.value, interrupt.outcome.value, interrupt.reason.value)
+            )
+            return loop_result.reply, loop_result
 
         for key, value in extract_fields(category, masked).items():
             answers.setdefault(key, value)
