@@ -22,6 +22,7 @@ from api.intent.service import IntentService
 from api.observability.agent_metrics import (
     record_action,
     record_confirmation,
+    record_feedback,
     record_intent,
     record_order_missing_field,
     record_order_step,
@@ -41,6 +42,7 @@ from api.policy.engine import PolicyDecision
 from api.policy.enums import AgentActionKind, DecisionReason
 from api.policy.service import PolicyService
 from api.reasoning.confirmation import Confirmation, detect_confirmation, detect_edit
+from api.reasoning.feedback import detect_feedback
 from api.reasoning.loop import LoopResult, ReasoningLoop
 from api.sessions.access import can_access, resolve_owner
 from api.sessions.enums import AuditAction, SessionStatus, TurnRole
@@ -59,6 +61,10 @@ _ORDER_READY_CONFIDENCE = 0.9
 _PARTNER_SERVICE_VALUE = Intent.PARTNER_SERVICE.value
 # Фолбэк-вопрос, если для поля не нашёлся текст (защитный; обычно не достигается).
 _FIELD_FALLBACK_REPLY = "Уточните, пожалуйста, детали заявки."
+# Быстрая оценка решения (#14): предложение после действия + ответы на оценку.
+_FEEDBACK_OFFER = " Помогло ли решение? Напишите «помогло» или «не помогло»."
+_FEEDBACK_THANKS = "Спасибо за оценку! Обращайтесь, если понадобится ещё."
+_FEEDBACK_SORRY = "Жаль, что не помогло. Если нужно — передам вопрос специалисту, напишите об этом."
 # Человекочитаемые метки обязательных полей §3 (для вопроса «что изменить?», #9).
 _FIELD_LABELS: dict[str, str] = {
     "cleaning_type": "тип уборки",
@@ -299,6 +305,10 @@ class SessionService:
                 f"Он ответит {self._settings.handoff_eta_text}."
             )
 
+        # #14: после оформления (action_taken) предлагаем оценить решение в этом же ответе.
+        if loop_result is not None and loop_result.action_taken:
+            reply = reply + _FEEDBACK_OFFER
+
         agent_turn = AgentTurn(
             session_id=session.id,
             role=TurnRole.AGENT,
@@ -355,6 +365,15 @@ class SessionService:
         `awaiting_confirmation`; запоминаем отложенное действие на сессии (только
         маскированный query, G3), действие НЕ исполняется до явного согласия.
         """
+        # #14: короткий ответ-оценка после действия («помогло»/«не помогло») — учитываем
+        # метрикой и благодарим, не запуская маршрутизацию. Длинный текст не перехватываем.
+        verdict = detect_feedback(masked)
+        if verdict is not None:
+            record_feedback(verdict)
+            record_action("answered")
+            user_turn.intent_trace = {"feedback": verdict}
+            return (_FEEDBACK_THANKS if verdict == "positive" else _FEEDBACK_SORRY), None
+
         outcome = await self._intent.classify(masked)
         if outcome is None:
             return _DEGRADED_REPLY, None
