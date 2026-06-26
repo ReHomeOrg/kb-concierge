@@ -83,7 +83,13 @@ async def test_confirmation_metrics_recorded(
     sess = await seed_session(user_id=str(principal.user_id))
     client = make_client(principal)
 
-    await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": "нужна уборка квартиры"})
+    # R1: добор полей §3 (тип уборки распознан из «после ремонта»), затем площадь/дата.
+    await client.post(
+        f"{_MSGS}/{sess.id}/messages", json={"content": "нужна уборка квартиры после ремонта"}
+    )
+    for answer in ("60 кв. м", "завтра в 10:00"):
+        await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": answer})
+    # Поля собраны → предложение (verdict=requested) → согласие (verdict=yes).
     await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": "да, оформляйте"})
     metrics = (await client.get("/metrics")).text
 
@@ -91,3 +97,5 @@ async def test_confirmation_metrics_recorded(
     assert 'verdict="requested"' in metrics
     assert 'verdict="yes"' in metrics
     assert 'kind="action_taken"' in metrics
+    assert "agent_order_steps_total" in metrics  # шаги обработки заявки (R1)
+    assert 'category="CLEANING"' in metrics

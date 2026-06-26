@@ -55,11 +55,17 @@ class HandoffService:
         self._emit_events = emit_events  # публиковать webhook agent.handoff_created (§10)
 
     async def force_handoff(
-        self, principal: Principal, session_id: uuid.UUID, correlation_id: str | None
+        self,
+        principal: Principal,
+        session_id: uuid.UUID,
+        correlation_id: str | None,
+        external_context: str | None = None,
     ) -> HandoffRecord:
         """Принудительная эскалация (`POST /sessions/{id}/handoff`). Коммитит сам.
 
         Видимость считается ДО действия: невидимая сессия → 404 (анти-enumeration).
+        `external_context` — транскрипт диалога-источника (чат «Помощь»): в снимок
+        тикета, маскируется (G3).
         """
         session = await self._sessions.get_for_update(session_id)
         if session is None or not can_access(principal, session):
@@ -80,6 +86,7 @@ class HandoffService:
             reason=reason,
             actor_id=actor_id,
             correlation_id=correlation_id,
+            external_context=external_context,
         )
         await self._handoffs.flush_refresh(record)
         await self._sessions.commit()
@@ -150,9 +157,15 @@ class HandoffService:
         reason: str,
         actor_id: uuid.UUID,
         correlation_id: str | None,
+        external_context: str | None = None,
     ) -> HandoffRecord:
         turns = await self._sessions.list_turns(session.id)
         snapshot = build_context_snapshot(turns)  # маскированный (G3)
+        if external_context:
+            # Транскрипт диалога-источника (чат «Помощь») — в снимок тикета,
+            # маскированный (G3). Для пустой сессии Консьержа становится осн. контекстом.
+            masked = mask_pii(external_context)
+            snapshot = masked if not turns else f"{masked}\n\n{snapshot}"
         ref = snapshot_ref(session.id, len(turns))
 
         ticket_id, unavailable = await self._open_ticket(

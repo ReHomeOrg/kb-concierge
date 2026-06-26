@@ -35,6 +35,16 @@ AGENT_CONFIRMATIONS = Counter(
     "События подтверждения платных/необратимых действий (§7.4)",
     ["verdict"],
 )
+AGENT_ORDER_STEPS = Counter(
+    "agent_order_steps_total",
+    "Шаги обработки заявки на услугу (правила R1+)",
+    ["category", "action"],
+)
+AGENT_ORDER_MISSING_FIELDS = Counter(
+    "agent_order_missing_fields_total",
+    "Запрошенные обязательные поля заявки (R1/§3)",
+    ["category", "field"],
+)
 
 
 def record_intent(intent: str, method: str) -> None:
@@ -57,3 +67,13 @@ def record_handoff(trigger: str, status: str) -> None:
 def record_confirmation(verdict: str) -> None:
     """`verdict` ∈ requested/yes/no/unclear (§7.4)."""
     AGENT_CONFIRMATIONS.labels(verdict=verdict).inc()
+
+
+def record_order_step(category: str, action: str) -> None:
+    """Шаг обработки заявки. Лейблы — только enum/категория (низкая кардинальность, G3)."""
+    AGENT_ORDER_STEPS.labels(category=category, action=action).inc()
+
+
+def record_order_missing_field(category: str, field: str) -> None:
+    """Запрос обязательного поля заявки (R1). Лейбл `field` — ключ из §3, не значение."""
+    AGENT_ORDER_MISSING_FIELDS.labels(category=category, field=field).inc()

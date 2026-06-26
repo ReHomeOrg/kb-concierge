@@ -1,0 +1,12 @@
+[
+  {"category": "CLEANING", "answers": {}, "action": "ASK_FIELDS"},
+  {"category": "CLEANING", "answers": {"cleaning_type": "генеральная"}, "action": "ASK_FIELDS"},
+  {"category": "CLEANING", "answers": {"cleaning_type": "генеральная", "area_or_rooms": "60 м2", "datetime": "завтра"}, "action": "READY_TO_DISPATCH"},
+  {"category": "MOVING", "answers": {}, "action": "ASK_FIELDS"},
+  {"category": "MOVING", "answers": {"city": "spb"}, "action": "ASK_FIELDS"},
+  {"category": "MOVING", "answers": {"city": "spb", "volume": "2 комнаты", "floors_elevators": "5 этаж, лифт", "movers_packing": "да", "datetime": "суббота"}, "action": "READY_TO_DISPATCH"},
+  {"category": "REPAIR", "answers": {}, "action": "ASK_FIELDS"},
+  {"category": "REPAIR", "answers": {"subcategory": "сантехника", "problem_description": "течёт кран", "datetime": "сегодня", "access": "да"}, "action": "READY_TO_DISPATCH"},
+  {"category": "KEY_DELIVERY", "answers": {}, "action": "HANDOFF"},
+  {"category": "OTHER", "answers": {}, "action": "HANDOFF"}
+]

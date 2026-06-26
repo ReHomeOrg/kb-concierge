@@ -75,6 +75,12 @@ class AgentSession(Base, TimestampMixin):
     # query (G3). NULL → нет ожидающего подтверждения.
     pending_action: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
+    # Контекст слот-филлинга заявки на услугу (R1, документ «правила обработки заявок»):
+    # {category, answers, asking, original_masked}. ТОЛЬКО маскированные значения (G3) —
+    # диалоговая память + ссылки, НЕ доменное состояние (авторитет — статус kb-partners).
+    # NULL → не идёт сбор полей заявки.
+    flow_state: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
     # Сквозной correlation_id создающего запроса (NFR-13 трассировка).
     correlation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 

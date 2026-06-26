@@ -23,9 +23,19 @@ from api.observability.agent_metrics import (
     record_action,
     record_confirmation,
     record_intent,
+    record_order_missing_field,
+    record_order_step,
     record_policy,
 )
 from api.observability.pii_mask import mask_pii
+from api.orders import (
+    ORDER_CATEGORIES,
+    OrderAction,
+    build_raw_input,
+    extract_fields,
+    missing_fields,
+    prompt_for,
+)
 from api.policy.engine import PolicyDecision
 from api.policy.enums import AgentActionKind, DecisionReason
 from api.policy.service import PolicyService
@@ -43,6 +53,11 @@ _DEGRADED_REPLY = "Принял ваше сообщение, обрабатыв�
 # Ответы разрешения подтверждения (FR-7.4).
 _DECLINE_REPLY = "Хорошо, отменил. Если понадобится — обращайтесь."
 _REASK_REPLY = "Нужно ваше подтверждение: оформляем заявку? Ответьте «да» или «нет»."
+# Уверенность собранной заявки на шаге подтверждения (не low-confidence; §1).
+_ORDER_READY_CONFIDENCE = 0.9
+_PARTNER_SERVICE_VALUE = Intent.PARTNER_SERVICE.value
+# Фолбэк-вопрос, если для поля не нашёлся текст (защитный; обычно не достигается).
+_FIELD_FALLBACK_REPLY = "Уточните, пожалуйста, детали заявки."
 
 
 @dataclass
@@ -201,6 +216,12 @@ class SessionService:
             reply, loop_result = await self._resolve_pending(
                 session, masked, tool_context, reasoning_loop, user_turn, extra_audits
             )
+        elif session.flow_state is not None:
+            # Идёт сбор обязательных полей заявки (R1): реплика — ответ на вопрос, НЕ
+            # подтверждение. Ветка ДО confirmation-гейта (B1 ревью).
+            reply, loop_result = await self._route_order_flow(
+                session, masked, tool_context, reasoning_loop, user_turn, extra_audits
+            )
         else:
             reply, loop_result = await self._route_new(
                 session, masked, base_ts, tool_context, reasoning_loop, user_turn, extra_audits
@@ -304,20 +325,10 @@ class SessionService:
         if outcome is None:
             return _DEGRADED_REPLY, None
         decision = self._policy.decide(outcome.intent, outcome.confidence, masked)
-        loop_result = await reasoning_loop.run(
-            decision=decision,
-            intent=outcome.intent,
-            query_masked=masked,
-            context=tool_context,
-            confirmed=False,
-        )
         trace = outcome.to_trace(base_ts)
         trace["policy"] = decision.to_trace()
-        trace["loop"] = loop_result.to_trace()
         user_turn.intent = outcome.intent.value
         user_turn.confidence = outcome.confidence
-        user_turn.intent_trace = trace
-
         extra_audits.append(
             (AuditAction.INTENT_CLASSIFIED.value, outcome.method, outcome.intent.value)
         )
@@ -327,6 +338,31 @@ class SessionService:
         # Наблюдаемость решений агента (§11, M8): низкокардинальные enum-лейблы.
         record_intent(outcome.intent.value, outcome.method)
         record_policy(decision.outcome.value, decision.reason.value)
+
+        # R1: партнёрская услуга с известной категорией и нехваткой обязательных полей
+        # §3 → начать их сбор (заявку НЕ создаём до полноты, A1). Иначе — обычный ход.
+        category = (
+            str(outcome.slots.get("category", ""))
+            if outcome.intent is Intent.PARTNER_SERVICE
+            else ""
+        )
+        if decision.outcome is AgentActionKind.TOOL_CALL and category in ORDER_CATEGORIES:
+            answers = extract_fields(category, masked)
+            missing = missing_fields(category, answers)
+            if missing:
+                return self._begin_order_flow(
+                    session, category, answers, missing[0], masked, trace, user_turn, extra_audits
+                )
+
+        loop_result = await reasoning_loop.run(
+            decision=decision,
+            intent=outcome.intent,
+            query_masked=masked,
+            context=tool_context,
+            confirmed=False,
+        )
+        trace["loop"] = loop_result.to_trace()
+        user_turn.intent_trace = trace
         kind = _action_kind(loop_result, decision.outcome)
         record_action(kind)
 
@@ -359,6 +395,120 @@ class SessionService:
                 (
                     AuditAction.CONFIRMATION_REQUESTED.value,
                     outcome.intent.value,
+                    decision.reason.value,
+                )
+            )
+        return loop_result.reply, loop_result
+
+    def _begin_order_flow(
+        self,
+        session: AgentSession,
+        category: str,
+        answers: dict[str, str],
+        asking: str,
+        masked: str,
+        trace: dict[str, Any],
+        user_turn: AgentTurn,
+        extra_audits: list[tuple[str, str | None, str | None]],
+    ) -> tuple[str, LoopResult | None]:
+        """Начать сбор обязательных полей заявки (R1): сохранить контекст, задать вопрос.
+
+        `flow_state` хранит ТОЛЬКО маскированные значения (G3) — диалоговая память,
+        не доменное состояние. Заявка не создаётся, пока поля не полны (A1).
+        """
+        session.flow_state = {
+            "category": category,
+            "answers": answers,
+            "asking": asking,
+            "original_masked": masked,
+        }
+        trace["order"] = {"action": OrderAction.ASK_FIELDS.value, "asking": asking}
+        user_turn.intent_trace = trace
+        record_order_step(category, OrderAction.ASK_FIELDS.value)
+        record_order_missing_field(category, asking)
+        record_action("clarify")
+        extra_audits.append((AuditAction.ORDER_FIELD_REQUESTED.value, category, asking))
+        return prompt_for(category, asking) or _FIELD_FALLBACK_REPLY, None
+
+    async def _route_order_flow(
+        self,
+        session: AgentSession,
+        masked: str,
+        tool_context: ToolContext,
+        reasoning_loop: ReasoningLoop,
+        user_turn: AgentTurn,
+        extra_audits: list[tuple[str, str | None, str | None]],
+    ) -> tuple[str, LoopResult | None]:
+        """Шаг сбора полей заявки (R1): реплика — ответ на вопрос (не подтверждение, B1).
+
+        Распознаёт значения из реплики + фиксирует ответ на заданное поле (маскировано,
+        G3). Не хватает полей → следующий вопрос; полно → предложение диспетча под
+        явным подтверждением (FR-7.4). Поток ограничен числом полей §3 (терминируется).
+        """
+        flow = dict(session.flow_state or {})
+        category = str(flow.get("category", ""))
+        answers: dict[str, str] = dict(flow.get("answers", {}))
+        asking = flow.get("asking")
+        original = str(flow.get("original_masked", ""))
+        user_turn.intent = _PARTNER_SERVICE_VALUE
+
+        for key, value in extract_fields(category, masked).items():
+            answers.setdefault(key, value)
+        if isinstance(asking, str) and not answers.get(asking):
+            answers[asking] = masked  # явный ответ на заданный вопрос (маскирован, G3)
+
+        missing = missing_fields(category, answers)
+        trace: dict[str, Any] = {
+            "order": {"category": category, "answered": sorted(answers), "missing": list(missing)}
+        }
+
+        if missing:
+            next_field = missing[0]
+            session.flow_state = {
+                "category": category,
+                "answers": answers,
+                "asking": next_field,
+                "original_masked": original,
+            }
+            trace["order"]["action"] = OrderAction.ASK_FIELDS.value
+            user_turn.intent_trace = trace
+            record_order_step(category, OrderAction.ASK_FIELDS.value)
+            record_order_missing_field(category, next_field)
+            record_action("clarify")
+            extra_audits.append((AuditAction.ORDER_FIELD_REQUESTED.value, category, next_field))
+            return prompt_for(category, next_field) or _FIELD_FALLBACK_REPLY, None
+
+        # Поля собраны → предложение диспетча под подтверждением (FR-7.4). Полный
+        # маскированный текст (обращение + ответы) уходит в kb-partners как авторитет.
+        raw_input = build_raw_input(original, answers)
+        decision = self._policy.decide(Intent.PARTNER_SERVICE, _ORDER_READY_CONFIDENCE, raw_input)
+        loop_result = await reasoning_loop.run(
+            decision=decision,
+            intent=Intent.PARTNER_SERVICE,
+            query_masked=raw_input,
+            context=tool_context,
+            confirmed=False,
+        )
+        trace["order"]["action"] = OrderAction.READY_TO_DISPATCH.value
+        trace["loop"] = loop_result.to_trace()
+        user_turn.intent_trace = trace
+        session.flow_state = None  # собрано → дальше confirmation-гейт (pending_action)
+        record_order_step(category, OrderAction.READY_TO_DISPATCH.value)
+        record_action(_action_kind(loop_result, decision.outcome))
+
+        if loop_result.awaiting_confirmation:
+            session.pending_action = {
+                "tools": list(decision.allowed_tools),
+                "intent": _PARTNER_SERVICE_VALUE,
+                "query_masked": raw_input,  # маскированный полный текст (G3)
+                "policy_version": decision.policy_version,
+                "reason": decision.reason.value,
+            }
+            record_confirmation("requested")
+            extra_audits.append(
+                (
+                    AuditAction.CONFIRMATION_REQUESTED.value,
+                    _PARTNER_SERVICE_VALUE,
                     decision.reason.value,
                 )
             )
@@ -399,6 +549,7 @@ class SessionService:
             trace["loop"] = loop_result.to_trace()
             user_turn.intent_trace = trace
             session.pending_action = None
+            session.flow_state = None  # заявка оформлена → сбор полей завершён
             kind = "action_taken" if loop_result.action_taken else "degraded"
             record_action(kind)
             if self._settings.webhook_subscriber_url:
@@ -410,6 +561,7 @@ class SessionService:
         user_turn.intent_trace = trace
         if verdict is Confirmation.NO:
             session.pending_action = None  # отказ — действие не инициируется
+            session.flow_state = None  # и сбор полей сброшен
             return _DECLINE_REPLY, None
         # UNCLEAR → переспрашиваем, отложенное действие сохраняется.
         return _REASK_REPLY, None

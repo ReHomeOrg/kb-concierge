@@ -16,7 +16,7 @@ from api.auth.dependencies import get_current_principal
 from api.auth.principal import Principal
 from api.errors import ProblemException
 from api.handoff.dependencies import get_handoff_service
-from api.handoff.schemas import HandoffAccepted
+from api.handoff.schemas import ForceHandoffRequest, HandoffAccepted
 from api.handoff.service import HandoffService
 from api.observability.context import get_request_id
 from api.reasoning.dependencies import get_reasoning_loop
@@ -109,14 +109,21 @@ async def post_message_endpoint(
 )
 async def force_handoff_endpoint(
     session_id: uuid.UUID,
+    payload: ForceHandoffRequest | None = None,
     principal: Principal = Depends(get_current_principal),
     handoff_service: HandoffService = Depends(get_handoff_service),
 ) -> HandoffAccepted:
     """Передать диалог человеку по запросу пользователя/оператора (§7.3, §10).
 
-    Недоступная сессия → 404 (анти-enumeration). kb-support недоступен → запись
-    `PENDING`, ответ 202 (эскалация принята, тикет дозаведётся, FR-6.6)."""
-    record = await handoff_service.force_handoff(principal, session_id, get_request_id())
+    Необязательное тело: `context` — внешний транскрипт диалога-источника (чат
+    «Помощь»), попадает в снимок тикета (маскируется, G3). Недоступная сессия → 404
+    (анти-enumeration). kb-support недоступен → запись `PENDING`, ответ 202 (FR-6.6)."""
+    record = await handoff_service.force_handoff(
+        principal,
+        session_id,
+        get_request_id(),
+        external_context=payload.context if payload else None,
+    )
     return HandoffAccepted.from_record(record)
 
 

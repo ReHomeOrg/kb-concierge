@@ -26,6 +26,17 @@ class HandoffAccepted(BaseModel):
         return cls(handoff_id=record.id, status=record.status, ticket_ref=record.target_ref)
 
 
+class ForceHandoffRequest(BaseModel):
+    """Тело `POST /sessions/{id}/handoff` (необязательное).
+
+    `context` — внешний транскрипт диалога-источника (напр. чат «Помощь» платформы):
+    попадает в снимок тикета kb-support. Маскируется на сервере (G3)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    context: str | None = Field(default=None, max_length=12000)
+
+
 class OperatorReplyIn(BaseModel):
     """Тело `POST /inbound/operator-reply` (SERVICE-only, FR-7.2).
 

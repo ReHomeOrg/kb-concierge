@@ -1,8 +1,9 @@
 """Интеграционные тесты исполнения write под политикой + подтверждение (M7.3, FR-7.4).
 
-Многоходовый сценарий: PARTNER_SERVICE → предложение + pending → согласие → исполнение
-(create_request+classify); отказ → отмена; неясно → переспрос. SUPPORT_ISSUE без
-подтверждения исполняется сразу. Деградация соседа → сообщение, без падения (FR-6.6).
+Многоходовый сценарий партнёрской услуги: приём → добор обязательных полей §3 (R1) →
+предложение + pending → согласие → исполнение (create_request+classify); отказ →
+отмена; неясно → переспрос. SUPPORT_ISSUE без подтверждения исполняется сразу.
+Деградация соседа → сообщение, без падения (FR-6.6).
 """
 
 from __future__ import annotations
@@ -34,6 +35,9 @@ SeedSession = Callable[..., Awaitable[AgentSession]]
 _MSGS = "/api/v1/concierge/sessions"
 _PARTNER_MSG = "Нужна уборка квартиры после ремонта"
 _SUPPORT_MSG = "Мастер не приехал в назначенное время"
+# Ответы на обязательные поля cleaning (§3): площадь и дата/время (тип уборки —
+# распознан из «после ремонта»). Хватает, чтобы дойти до предложения.
+_CLEANING_ANSWERS = ("60 кв. м", "завтра в 10:00", "без особых пожеланий")
 
 
 class _FakeTool:
@@ -62,7 +66,17 @@ async def _audit_actions(session: AsyncSession, sid: Any) -> list[str]:
     )
 
 
-async def test_partner_service_requires_confirmation_then_executes(
+async def _drive_to_proposal(client: AsyncClient, sid: Any) -> Any:
+    """Пройти R1-сбор полей до предложения с подтверждением (FR-7.4)."""
+    resp = await client.post(f"{_MSGS}/{sid}/messages", json={"content": _PARTNER_MSG})
+    for answer in _CLEANING_ANSWERS:
+        if "подтвердите" in resp.json()["content"].lower():
+            break
+        resp = await client.post(f"{_MSGS}/{sid}/messages", json={"content": answer})
+    return resp
+
+
+async def test_partner_service_gathers_fields_then_confirms_and_executes(
     make_client: MakeClient,
     make_principal: MakePrincipal,
     seed_session: SeedSession,
@@ -81,22 +95,35 @@ async def test_partner_service_requires_confirmation_then_executes(
     sess = await seed_session(user_id=str(principal.user_id))
     client = make_client(principal)
 
-    # Ход 1: предложение, действие НЕ исполнено (FR-7.4), pending выставлен.
+    # Ход 1: R1 — добор полей, заявка НЕ создаётся без полноты (A1).
     r1 = await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": _PARTNER_MSG})
     assert r1.status_code == 200
-    assert "подтвердите" in r1.json()["content"].lower()
-    assert create.calls == []  # ничего не оформлено без согласия
+    assert "подтвердите" not in r1.json()["content"].lower()  # это вопрос, не предложение
+    assert create.calls == []
+    await session.refresh(sess)
+    assert sess.flow_state is not None  # идёт сбор полей
+    assert AuditAction.ORDER_FIELD_REQUESTED.value in await _audit_actions(session, sess.id)
+
+    # Доводим поля до предложения с подтверждением (FR-7.4).
+    proposal = r1
+    for answer in _CLEANING_ANSWERS:
+        if "подтвердите" in proposal.json()["content"].lower():
+            break
+        proposal = await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": answer})
+    assert "подтвердите" in proposal.json()["content"].lower()
+    assert create.calls == []  # всё ещё ничего не оформлено без согласия
     await session.refresh(sess)
     assert sess.pending_action is not None
+    assert sess.flow_state is None  # собрано → перешли к подтверждению
     assert AuditAction.CONFIRMATION_REQUESTED.value in await _audit_actions(session, sess.id)
 
-    # Ход 2: согласие → исполнение create_request + classify, pending снят.
+    # Согласие → исполнение create_request + classify, pending снят.
     r2 = await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": "да, оформляйте"})
     assert r2.status_code == 200
-    assert "заявка" in r2.json()["content"].lower()
     assert "P-100" in r2.json()["content"]
     assert len(create.calls) == 1
-    assert create.calls[0]["raw_input"] == _PARTNER_MSG  # исходный запрос (маскирован)
+    assert _PARTNER_MSG in create.calls[0]["raw_input"]  # исходный запрос + детали §3
+    assert "area_or_rooms" in create.calls[0]["raw_input"]  # собранные поля переданы
     assert len(classify.calls) == 1
     await session.refresh(sess)
     assert sess.pending_action is None
@@ -117,12 +144,13 @@ async def test_partner_service_decline_cancels(
     sess = await seed_session(user_id=str(principal.user_id))
     client = make_client(principal)
 
-    await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": _PARTNER_MSG})
+    await _drive_to_proposal(client, sess.id)
     r2 = await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": "нет, отмена"})
     assert "отменил" in r2.json()["content"].lower()
     assert create.calls == []  # действие не инициировано (FR-7.4)
     await session.refresh(sess)
     assert sess.pending_action is None
+    assert sess.flow_state is None
 
 
 async def test_partner_service_unclear_reasks_and_keeps_pending(
@@ -137,7 +165,7 @@ async def test_partner_service_unclear_reasks_and_keeps_pending(
     sess = await seed_session(user_id=str(principal.user_id))
     client = make_client(principal)
 
-    await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": _PARTNER_MSG})
+    await _drive_to_proposal(client, sess.id)
     r2 = await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": "а сколько это стоит?"})
     assert "подтверждение" in r2.json()["content"].lower()
     assert create.calls == []
@@ -182,7 +210,7 @@ async def test_confirmed_partner_create_degrades_when_unavailable(
     sess = await seed_session(user_id=str(principal.user_id))
     client = make_client(principal)
 
-    await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": _PARTNER_MSG})
+    await _drive_to_proposal(client, sess.id)
     r2 = await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": "да"})
     assert "недоступен" in r2.json()["content"].lower()  # деградация (FR-6.6), не падение
     await session.refresh(sess)
