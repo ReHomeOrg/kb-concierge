@@ -22,7 +22,21 @@ _BUNDLED_PATH = Path(__file__).with_name("replies_data.json")
 _OVERRIDE_ENV = "KBC_REPLIES_PATH"
 #: Обязательные ключи реплик (battery: отсутствие → ошибка сборки на встроенном файле).
 _REQUIRED_REPLIES = frozenset(
-    {"propose_partner", "propose_default", "decline", "reask", "write_unavailable", "handoff"}
+    {
+        "propose_partner",
+        "propose_default",
+        "decline",
+        "reask",
+        "write_unavailable",
+        "handoff",
+        "clarify",
+        "pending",
+        "small_talk",
+        "out_of_scope",
+        "default",
+        "no_answer",
+        "fallback_answer",
+    }
 )
 
 

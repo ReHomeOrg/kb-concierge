@@ -14,16 +14,20 @@ _REQUIRED = {
     "reask",
     "write_unavailable",
     "handoff",
+    "clarify",
+    "pending",
+    "small_talk",
+    "out_of_scope",
+    "default",
+    "no_answer",
+    "fallback_answer",
 }
 
 _CUSTOM = {
     "confirmation": {"yes": ["ага"], "no": ["неа"]},
     "replies": {
-        "propose_partner": "p1",
-        "propose_default": "p2",
+        **dict.fromkeys(_REQUIRED, "x"),
         "decline": "Отменено.",
-        "reask": "Да или нет?",
-        "write_unavailable": "Недоступно.",
         "handoff": "Зову человека.",
     },
 }

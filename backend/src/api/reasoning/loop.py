@@ -21,17 +21,14 @@ from api.reasoning.replies import REPLIES
 from api.tools.base import ToolContext
 from api.tools.registry import ToolRegistry
 
-# Тексты confirmation/handoff — из конфига (replies_data.json, правятся без кода).
+# Тексты реплик хода — из конфига (replies_data.json, правятся без кода).
 _HANDOFF_REPLY = REPLIES["handoff"]
-_CLARIFY_REPLY = "Уточните, пожалуйста, детали запроса, чтобы я направил его верно."
-_CONFIRM_REPLY = "Подготовил заявку. Подтвердите — и я передам её в работу."
-_PENDING_REPLY = "Принял, передаю запрос в обработку."
-_SMALL_TALK_REPLY = "Рад помочь! Чем могу быть полезен?"
-_OUT_OF_SCOPE_REPLY = "Это вне моей области, но помогу по аренде, услугам и поддержке."
-_DEFAULT_REPLY = "Принял ваше сообщение, обрабатываю запрос."
-_NO_ANSWER_REPLY = (
-    "Не нашёл точного ответа в базе знаний — уточните вопрос, или я передам его специалисту."
-)
+_CLARIFY_REPLY = REPLIES["clarify"]
+_PENDING_REPLY = REPLIES["pending"]
+_SMALL_TALK_REPLY = REPLIES["small_talk"]
+_OUT_OF_SCOPE_REPLY = REPLIES["out_of_scope"]
+_DEFAULT_REPLY = REPLIES["default"]
+_NO_ANSWER_REPLY = REPLIES["no_answer"]
 
 _KB_SEARCH = "kb.search"
 _KB_ANSWER = "kb.answer"
@@ -303,7 +300,7 @@ class ReasoningLoop:
 
 def _build_answer(data: dict[str, Any], citations: list[dict[str, Any]]) -> str:
     """Детерминированная сборка ответа из результатов KB (LLM-синтез — ADR-0003)."""
-    base = data.get("answer") or citations[0].get("snippet") or "Вот что удалось найти."
+    base = data.get("answer") or citations[0].get("snippet") or REPLIES["fallback_answer"]
     titles = ", ".join(str(c.get("title", "")) for c in citations[:3] if c.get("title"))
     return f"{base} (источники: {titles})" if titles else str(base)
 
