@@ -7,7 +7,8 @@ operator-reply (SERVICE-only, маскирование); поведение по
 from __future__ import annotations
 
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Any
 
 import pytest
 from httpx import AsyncClient
@@ -19,9 +20,13 @@ from api.handoff.dependencies import get_handoff_service
 from api.handoff.repository import HandoffRepository
 from api.handoff.service import HandoffService
 from api.main import app
+from api.reasoning.dependencies import get_reasoning_loop
+from api.reasoning.limits import Limits
+from api.reasoning.loop import ReasoningLoop
 from api.sessions.enums import AuditAction, SessionStatus, TurnRole
 from api.sessions.models import AgentSession, AgentTurn, AuditLog
 from api.sessions.repository import SessionRepository
+from api.tools.base import ToolContext, ToolResult
 from api.tools.registry import ToolRegistry
 
 pytestmark = pytest.mark.asyncio
@@ -35,12 +40,34 @@ _INBOUND = "/api/v1/concierge/inbound/operator-reply"
 _CLAIM = "хочу подать претензию на возврат денег за услугу"
 
 
-def _override_handoff(session: AsyncSession) -> None:
+class _FakeTool:
+    def __init__(self, name: str, result: ToolResult) -> None:
+        self.name = name
+        self.description = "fake"
+        self._result = result
+        self.calls: list[dict[str, Any]] = []
+
+    async def run(self, payload: Mapping[str, Any], context: ToolContext) -> ToolResult:
+        self.calls.append(dict(payload))
+        return self._result
+
+
+def _override_handoff(session: AsyncSession, *tools: _FakeTool) -> None:
+    reg = ToolRegistry()
+    for t in tools:
+        reg.register(t)
     app.dependency_overrides[get_handoff_service] = lambda: HandoffService(
         sessions=SessionRepository(session),
         handoffs=HandoffRepository(session),
-        registry=ToolRegistry(),
+        registry=reg,
     )
+
+
+def _override_loop(*tools: _FakeTool) -> None:
+    reg = ToolRegistry()
+    for t in tools:
+        reg.register(t)
+    app.dependency_overrides[get_reasoning_loop] = lambda: ReasoningLoop(reg, Limits())
 
 
 async def _actions(session: AsyncSession, sid: uuid.UUID) -> list[str]:
@@ -64,16 +91,16 @@ async def test_claim_escalates_and_marks_handed_off(
     assert AuditAction.HANDOFF_CREATED.value in await _actions(session, sess.id)
 
 
-async def test_user_blocked_after_handoff_409(
+async def test_user_message_forwarded_to_ticket(
     make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
     session: AsyncSession,
 ) -> None:
-    """ЗАФИКСИРОВАННАЯ НЕСТЫКОВКА (на решение Архитектора): после эскалации сессия HANDED_OFF,
-    и любая следующая реплика пользователя через /messages → 409, без дружелюбного объяснения.
-    Оператор отвечает в диалог (operator-reply), но пользователь ответить тем же путём не может.
-    Тест фиксирует текущее поведение; ожидаемое — отдельное решение (409→дружелюбно / разрешить
-    дослать в тикет)."""
-    _override_handoff(session)
+    # ФИКС: после эскалации реплика пользователя пересылается в тикет (support.add_message),
+    # а не отбивается 409. Эскалация с фейковым handoff.to_operator → тикет T-1; add_message фейк.
+    handoff_tool = _FakeTool("handoff.to_operator", ToolResult(data={"ticket_id": "T-1"}))
+    add_msg = _FakeTool("support.add_message", ToolResult(data={"ticket_id": "T-1"}))
+    _override_handoff(session, handoff_tool)
+    _override_loop(add_msg)
     p = make_principal(PrincipalKind.USER)
     sess = await seed_session(user_id=str(p.user_id))
     client = make_client(p)
@@ -81,7 +108,27 @@ async def test_user_blocked_after_handoff_409(
     r2 = await client.post(
         f"{_MSGS}/{sess.id}/messages", json={"content": "дополню: договор №123"}
     )
-    assert r2.status_code == 409  # текущее поведение (flagged)
+    assert r2.status_code == 200  # больше не 409
+    assert "специалист" in r2.json()["content"].lower()
+    assert len(add_msg.calls) == 1  # сообщение ушло в тикет
+    assert add_msg.calls[0]["ticket_id"] == "T-1"
+    assert "договор" in add_msg.calls[0]["body"]
+
+
+async def test_user_message_after_handoff_degrades_not_blocked(
+    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    session: AsyncSession,
+) -> None:
+    # Нет тикета (PENDING, kb-support был недоступен) → пользователь НЕ заблокирован:
+    # 200 + «передам позже» (деградация, реплика сохранена).
+    _override_handoff(session)  # пустой реестр → handoff PENDING без тикета
+    p = make_principal(PrincipalKind.USER)
+    sess = await seed_session(user_id=str(p.user_id))
+    client = make_client(p)
+    await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": _CLAIM})
+    r2 = await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": "дополнение"})
+    assert r2.status_code == 200  # не 409
+    assert "позже" in r2.json()["content"].lower()
 
 
 async def test_force_handoff_endpoint(

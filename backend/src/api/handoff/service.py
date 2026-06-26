@@ -134,6 +134,14 @@ class HandoffService:
         await self._sessions.commit()
         return turn
 
+    async def active_ticket_ref(self, session_id: uuid.UUID) -> str | None:
+        """Тикет активной эскалации сессии (для пересылки реплик пользователя в тикет).
+
+        None — нет открытой эскалации либо она PENDING (kb-support был недоступен, тикета нет).
+        """
+        handoff = await self._handoffs.latest_open_for_session(session_id)
+        return handoff.target_ref if handoff is not None else None
+
     async def escalate_in_turn(
         self, *, session: AgentSession, reason: str, correlation_id: str | None
     ) -> HandoffRecord:
