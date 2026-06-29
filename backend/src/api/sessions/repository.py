@@ -44,6 +44,16 @@ class SessionRepository:
         """Добавить реплику в текущую транзакцию (flush/commit — у сервиса)."""
         self._db.add(turn)
 
+    async def turn_by_idempotency_key(
+        self, session_id: uuid.UUID, idempotency_key: str
+    ) -> AgentTurn | None:
+        """Реплика, уже добавленная по этому ключу идемпотентности (ERR-18, inbound)."""
+        stmt = select(AgentTurn).where(
+            AgentTurn.session_id == session_id,
+            AgentTurn.idempotency_key == idempotency_key,
+        )
+        return (await self._db.execute(stmt)).scalar_one_or_none()
+
     async def flush_refresh(self, turn: AgentTurn) -> None:
         """Сбросить в БД и подгрузить server-side поля реплики (ts)."""
         await self._db.flush()

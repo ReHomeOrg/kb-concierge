@@ -6,7 +6,7 @@ SERVICE-only (m2m из kb-support): не-сервисный принципал �
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Header, status
 
 from api.auth.principal import Principal
 from api.handoff.dependencies import get_handoff_service, require_service
@@ -28,17 +28,20 @@ async def operator_reply_endpoint(
     payload: OperatorReplyIn,
     principal: Principal = Depends(require_service),
     handoff_service: HandoffService = Depends(get_handoff_service),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> TurnRead:
     """Принять внешний ответ оператора и добавить его репликой в диалог (§7.3).
 
     Внутренние заметки оператора сюда не передаются (инвариант «внутреннее ≠
     внешнее», FR-7.3): схема запрещает посторонние поля. Сессия без активной
-    эскалации → 404."""
+    эскалации → 404. Повторный вебхук с тем же `Idempotency-Key` не дублирует
+    реплику (ERR-18)."""
     turn = await handoff_service.operator_reply(
         principal=principal,
         session_id=payload.session_id,
         message=payload.message,
         ticket_ref=payload.ticket_ref,
         correlation_id=get_request_id(),
+        idempotency_key=idempotency_key,
     )
     return TurnRead.from_orm_turn(turn)

@@ -100,6 +100,7 @@ class HandoffService:
         message: str,
         ticket_ref: str | None,
         correlation_id: str | None,
+        idempotency_key: str | None = None,
     ) -> AgentTurn:
         """Вернуть ВНЕШНИЙ ответ оператора в диалог (FR-7.2). Коммитит сам.
 
@@ -107,6 +108,9 @@ class HandoffService:
         заметки оператора сюда не передаются (инвариант «внутреннее ≠ внешнее», FR-7.3):
         контур приёма SERVICE-only, схема запрещает посторонние поля. Без активной
         эскалации → 404 (misrouted reply). ПДн в `content_masked` маскируются (G3).
+
+        `idempotency_key` (заголовок `Idempotency-Key` от источника) — повторный вебхук
+        с тем же ключом возвращает уже добавленную реплику без дубля (ERR-18).
         """
         session = await self._sessions.get_for_update(session_id)
         if session is None:
@@ -115,12 +119,18 @@ class HandoffService:
         if handoff is None:
             raise ProblemException.not_found(detail="No active handoff for session")
 
+        if idempotency_key is not None:
+            existing = await self._sessions.turn_by_idempotency_key(session.id, idempotency_key)
+            if existing is not None:
+                return existing  # идемпотентный no-op: реплика уже принята
+
         turn = AgentTurn(
             session_id=session.id,
             role=TurnRole.OPERATOR,
             content=message,
             content_masked=mask_pii(message),
             correlation_id=correlation_id,
+            idempotency_key=idempotency_key,
         )
         self._sessions.add_turn(turn)
         self._sessions.add_audit(

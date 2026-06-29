@@ -31,10 +31,10 @@ from api.observability.pii_mask import mask_pii
 from api.orders import (
     ORDER_CATEGORIES,
     OrderAction,
+    build_fields_prompt,
     build_raw_input,
     extract_fields,
     missing_fields,
-    prompt_for,
 )
 from api.policy.engine import PolicyDecision
 from api.policy.enums import AgentActionKind, DecisionReason
@@ -514,7 +514,11 @@ class SessionService:
         record_order_missing_field(category, asking)
         record_action("clarify")
         extra_audits.append((AuditAction.ORDER_FIELD_REQUESTED.value, category, asking))
-        return prompt_for(category, asking) or _FIELD_FALLBACK_REPLY, None
+        # Один батч-вопрос на все недостающие поля (ERR-03); `asking` (первое поле) —
+        # для free-text fallback на следующем ходе.
+        return build_fields_prompt(category, missing_fields(category, answers)) or (
+            _FIELD_FALLBACK_REPLY
+        ), None
 
     async def _route_order_flow(
         self,
@@ -586,7 +590,8 @@ class SessionService:
             record_order_missing_field(category, next_field)
             record_action("clarify")
             extra_audits.append((AuditAction.ORDER_FIELD_REQUESTED.value, category, next_field))
-            return prompt_for(category, next_field) or _FIELD_FALLBACK_REPLY, None
+            # Один батч-вопрос на все ещё недостающие поля (ERR-03).
+            return build_fields_prompt(category, missing) or _FIELD_FALLBACK_REPLY, None
 
         # Поля собраны → предложение диспетча под подтверждением (FR-7.4). Полный
         # маскированный текст (обращение + ответы) уходит в kb-partners как авторитет.

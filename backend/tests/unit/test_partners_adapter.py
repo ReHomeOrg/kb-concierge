@@ -89,6 +89,21 @@ async def test_create_from_chat_maps_card_and_masks() -> None:
     assert body["chat_session_id"] == "s-1"  # идемпотентность соседа (FR-6.4)
     assert body["raw_input"] == "уборка после ремонта ***"  # маскированный (G3)
     assert seen.get("x-correlation-id") == "corr-1"
+    assert seen.get("idempotency-key") == "create:s-1"  # ERR-16: стабильный ключ
+
+
+async def test_dispatch_sends_stable_idempotency_key() -> None:
+    # ERR-16: повтор dispatch шлёт тот же Idempotency-Key (по request_id).
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(request.headers)
+        return httpx.Response(200, json={"id": "r-7", "status": "ASSIGNED"})
+
+    client, http = _client(httpx.MockTransport(handler))
+    async with http:
+        await client.dispatch(request_id="r-7", correlation_id="corr-1")
+    assert seen.get("idempotency-key") == "dispatch:r-7"
 
 
 async def test_classify_delegates_via_token_not_header() -> None:

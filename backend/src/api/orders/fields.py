@@ -93,6 +93,22 @@ def prompt_for(category: str, key: str) -> str | None:
     return None
 
 
+def build_fields_prompt(category: str, missing: tuple[str, ...]) -> str:
+    """Один батч-вопрос на ВСЕ недостающие поля сразу (ERR-03, доктрина «минимум
+    вопросов»). Одно поле → его вопрос как есть; несколько → объединённый список.
+
+    Извлечение значений мульти-полевое (`extract_fields`), поэтому пользователь
+    может ответить на всё разом; нераспознанное добирается следующим батчем.
+    """
+    prompts = [p for key in missing if (p := prompt_for(category, key)) is not None]
+    if not prompts:
+        return ""
+    if len(prompts) == 1:
+        return prompts[0]
+    listed = "\n".join(f"— {p}" for p in prompts)
+    return f"Чтобы оформить заявку, уточните, пожалуйста:\n{listed}"
+
+
 def missing_fields(category: str, answers: dict[str, str]) -> tuple[str, ...]:
     """Ключи ещё не заполненных обязательных полей в порядке опроса (R1/A1)."""
     return tuple(key for key in required_keys(category) if not answers.get(key))

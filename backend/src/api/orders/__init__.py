@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from api.orders.constants import ORDER_CATEGORIES
 from api.orders.fields import (
+    build_fields_prompt,
     extract_fields,
     missing_fields,
     prompt_for,
@@ -23,6 +24,7 @@ from api.orders.flow import OrderAction, build_raw_input, next_action
 __all__ = [
     "ORDER_CATEGORIES",
     "OrderAction",
+    "build_fields_prompt",
     "build_raw_input",
     "extract_fields",
     "missing_fields",

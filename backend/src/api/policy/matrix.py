@@ -75,7 +75,7 @@ class AutonomyMatrix:
     """Матрица автономности: правила по намерениям + порог уверенности."""
 
     rules: dict[Intent, IntentRule] = field(default_factory=lambda: dict(DEFAULT_MATRIX))
-    confidence_threshold: float = 0.7
+    confidence_threshold: float = 0.75  # ТЗ Док.2 (CONFIDENCE_THRESHOLD)
     version: str = POLICY_VERSION
 
     def rule_for(self, intent: Intent) -> IntentRule:

@@ -16,7 +16,7 @@ import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, Index, String, Text, func
+from sqlalchemy import DateTime, Enum, Float, ForeignKey, Index, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -124,8 +124,22 @@ class AgentTurn(Base):
     intent_trace: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     correlation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Идемпотентность inbound (ERR-18): стабильный ключ от источника (kb-support).
+    # Повторный вебхук с тем же ключом не дублирует реплику. NULL для обычных turn'ов
+    # (агент/пользователь) — partial-unique индекс распространяется только на не-NULL.
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     ts: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )
+
+    __table_args__ = (
+        Index(
+            "uq_agent_turns_session_idempotency",
+            "session_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
     )
 
 

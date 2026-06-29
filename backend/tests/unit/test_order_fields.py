@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from api.orders.fields import (
+    build_fields_prompt,
     extract_fields,
     missing_fields,
     prompt_for,
@@ -50,3 +51,24 @@ def test_extract_repair_subcategory_and_description() -> None:
 def test_prompt_for_known_and_unknown() -> None:
     assert prompt_for("CLEANING", "datetime") is not None
     assert prompt_for("CLEANING", "nope") is None
+
+
+def test_build_fields_prompt_batches_all_missing() -> None:
+    # ERR-03: несколько недостающих полей → ОДИН вопрос со всеми сразу.
+    missing = missing_fields("CLEANING", {})  # все три поля пусты
+    assert len(missing) == 3
+    prompt = build_fields_prompt("CLEANING", missing)
+    # Один текст, содержащий вопросы по всем недостающим полям.
+    assert prompt_for("CLEANING", "cleaning_type") in prompt
+    assert prompt_for("CLEANING", "area_or_rooms") in prompt
+    assert prompt_for("CLEANING", "datetime") in prompt
+
+
+def test_build_fields_prompt_single_missing_is_plain_question() -> None:
+    # Одно поле → его вопрос как есть, без «списочной» обёртки.
+    prompt = build_fields_prompt("CLEANING", ("datetime",))
+    assert prompt == prompt_for("CLEANING", "datetime")
+
+
+def test_build_fields_prompt_empty_is_empty() -> None:
+    assert build_fields_prompt("CLEANING", ()) == ""

@@ -28,12 +28,20 @@ from api.clients.retry import RetryPolicy, SleepFn, retry_async
 _RETRYABLE_TRANSPORT = (httpx.TransportError,)
 
 
-class _ServerError(Exception):
-    """Внутренний маркер 5xx-ответа — ретраибелен, не покидает модуль."""
+class _RetryableStatusError(Exception):
+    """Внутренний маркер ретраибельного статуса — не покидает модуль.
+
+    Ретраибельны: 5xx (сервер сбоит) и 429 Too Many Requests (rate-limit —
+    повтор с backoff корректен). Прочие 4xx — passthrough (не транзиент).
+    """
 
     def __init__(self, status_code: int) -> None:
         self.status_code = status_code
-        super().__init__(f"server error {status_code}")
+        super().__init__(f"retryable status {status_code}")
+
+
+def _is_retryable_status(status_code: int) -> bool:
+    return status_code >= 500 or status_code == 429
 
 
 class ResilientHttpClient:
@@ -70,18 +78,18 @@ class ResilientHttpClient:
 
         async def _attempt() -> httpx.Response:
             resp = await self._http.request(method, url, **kwargs)
-            if resp.status_code >= 500:
-                raise _ServerError(resp.status_code)
+            if _is_retryable_status(resp.status_code):
+                raise _RetryableStatusError(resp.status_code)
             return resp
 
         try:
             response = await retry_async(
                 _attempt,
                 self._retry,
-                retry_on=(*_RETRYABLE_TRANSPORT, _ServerError),
+                retry_on=(*_RETRYABLE_TRANSPORT, _RetryableStatusError),
                 sleep=self._sleep,
             )
-        except (_ServerError, *_RETRYABLE_TRANSPORT) as exc:
+        except (_RetryableStatusError, *_RETRYABLE_TRANSPORT) as exc:
             await self._breaker.record_failure()
             record_request(self._name, operation, "error", self._monotonic() - start)
             raise ExternalServiceError(self._name, operation, str(exc)) from exc
