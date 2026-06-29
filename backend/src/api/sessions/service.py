@@ -17,6 +17,7 @@ from api.auth.system_actors import AGENT_ACTOR_ID
 from api.config import Settings
 from api.errors import ProblemException
 from api.handoff.service import HandoffService
+from api.intent.engine import category_scores, negates_category
 from api.intent.enums import Intent
 from api.intent.service import IntentService
 from api.observability.agent_metrics import (
@@ -35,6 +36,7 @@ from api.orders import (
     build_raw_input,
     extract_fields,
     missing_fields,
+    required_keys,
 )
 from api.policy.engine import PolicyDecision
 from api.policy.enums import AgentActionKind, DecisionReason
@@ -55,6 +57,9 @@ _DECLINE_REPLY = "Хорошо, отменил. Если понадобится 
 _REASK_REPLY = "Нужно ваше подтверждение: оформляем заявку? Ответьте «да» или «нет»."
 # Уверенность собранной заявки на шаге подтверждения (не low-confidence; §1).
 _ORDER_READY_CONFIDENCE = 0.9
+# ERR-30: сколько low-confidence уточнений допустимо подряд до handoff (≤1 вопрос,
+# затем человек — доктрина «минимум вопросов»).
+_MAX_LOW_CONFIDENCE_CLARIFIES = 1
 _PARTNER_SERVICE_VALUE = Intent.PARTNER_SERVICE.value
 # Фолбэк-вопрос, если для поля не нашёлся текст (защитный; обычно не достигается).
 _FIELD_FALLBACK_REPLY = "Уточните, пожалуйста, детали заявки."
@@ -391,6 +396,52 @@ class SessionService:
                 correlation_id,
             )
 
+    def _detect_category_switch(self, current: str, masked: str) -> str | None:
+        """ERR-02: явная коррекция категории заявки → новая order-категория или None.
+
+        Консервативно: переключаем только при позитивном сигнале другой order-
+        категории И (её счёт строго выше текущей ИЛИ текущая явно отрицается «не …»).
+        Так попутное упоминание («уборка после ремонта») НЕ триггерит смену.
+        """
+        text = masked.lower()
+        scores = category_scores(text)
+        current_score = scores.get(current, 0)
+        others = {
+            c: s for c, s in scores.items() if c in ORDER_CATEGORIES and c != current and s > 0
+        }
+        if not others:
+            return None
+        best = max(others, key=lambda c: others[c])
+        if others[best] > current_score or negates_category(text, current):
+            return best
+        return None
+
+    def _apply_low_confidence_streak(
+        self, session: AgentSession, decision: PolicyDecision
+    ) -> PolicyDecision:
+        """ERR-30: повтор низкой уверенности → handoff («≤1 уточняющий вопрос»).
+
+        Первое low-confidence уточнение проходит как CLARIFY; если СЛЕДУЮЩИЙ ход
+        снова низкоуверенный — эскалируем человеку (LOW_CONFIDENCE_EXHAUSTED), не
+        зацикливая уточнения. Любой иной исход общего хода сбрасывает счётчик.
+        """
+        is_low_conf = (
+            decision.outcome is AgentActionKind.CLARIFY
+            and decision.reason is DecisionReason.LOW_CONFIDENCE
+        )
+        if not is_low_conf:
+            session.low_confidence_streak = 0
+            return decision
+        if session.low_confidence_streak >= _MAX_LOW_CONFIDENCE_CLARIFIES:
+            session.low_confidence_streak = 0
+            return PolicyDecision(
+                AgentActionKind.HANDOFF,
+                DecisionReason.LOW_CONFIDENCE_EXHAUSTED,
+                decision.policy_version,
+            )
+        session.low_confidence_streak += 1
+        return decision
+
     async def _route_new(
         self,
         session: AgentSession,
@@ -411,6 +462,7 @@ class SessionService:
         if outcome is None:
             return _DEGRADED_REPLY, None
         decision = self._policy.decide(outcome.intent, outcome.confidence, masked)
+        decision = self._apply_low_confidence_streak(session, decision)
         trace = outcome.to_trace(base_ts)
         trace["policy"] = decision.to_trace()
         user_turn.intent = outcome.intent.value
@@ -565,6 +617,17 @@ class SessionService:
                 (AuditAction.POLICY_DECISION.value, interrupt.outcome.value, interrupt.reason.value)
             )
             return loop_result.reply, loop_result
+
+        # ERR-02: пользователь поправил категорию посреди сбора («это ремонт, не
+        # уборка»). Реклассифицируем БЕЗ сброса уже собранных полей: переносим те,
+        # что валидны для новой категории (пересечение ключей), остальное — заново.
+        switched = self._detect_category_switch(category, masked)
+        if switched is not None:
+            answers = {k: v for k, v in answers.items() if k in required_keys(switched)}
+            category = switched
+            asking = None  # прежний заданный вопрос больше не релевантен
+            extra_audits.append((AuditAction.ORDER_RECLASSIFIED.value, category, None))
+            record_order_step(category, OrderAction.ASK_FIELDS.value)
 
         for key, value in extract_fields(category, masked).items():
             answers.setdefault(key, value)

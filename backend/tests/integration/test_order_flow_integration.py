@@ -103,6 +103,59 @@ async def test_moving_gathers_fields_then_create_classify_dispatch(
     assert sess.flow_state is None
 
 
+async def test_reclassify_category_preserves_valid_fields(
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
+    session: AsyncSession,
+) -> None:
+    # ERR-02: пользователь поправил категорию посреди сбора → реклассификация без
+    # сброса; поля, невалидные для новой категории, отбрасываются, флоу продолжается.
+    _override_loop()
+    principal = make_principal(PrincipalKind.USER)
+    sess = await seed_session(user_id=str(principal.user_id))
+    client = make_client(principal)
+
+    # Старт сбора по CLEANING: распознан cleaning_type, спрашиваются остальные поля.
+    await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": "нужна генеральная уборка"})
+    await session.refresh(sess)
+    assert sess.flow_state is not None
+    assert sess.flow_state["category"] == "CLEANING"
+    assert sess.flow_state["answers"].get("cleaning_type") == "генеральная"
+
+    # Коррекция категории.
+    resp = await client.post(
+        f"{_MSGS}/{sess.id}/messages", json={"content": "это ремонт, не уборка"}
+    )
+    await session.refresh(sess)
+    assert sess.flow_state is not None
+    assert sess.flow_state["category"] == "REPAIR"  # переключились
+    assert "cleaning_type" not in sess.flow_state["answers"]  # невалидное для REPAIR — отброшено
+    assert "?" in resp.json()["content"]  # флоу продолжается, спрашивает поля REPAIR
+
+
+async def test_incidental_mention_does_not_reclassify(
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
+    session: AsyncSession,
+) -> None:
+    # Консервативность: попутное упоминание другой категории без негации текущей
+    # НЕ меняет категорию (уборка остаётся уборкой).
+    _override_loop()
+    principal = make_principal(PrincipalKind.USER)
+    sess = await seed_session(user_id=str(principal.user_id))
+    client = make_client(principal)
+
+    await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": "нужна генеральная уборка"})
+    await client.post(
+        f"{_MSGS}/{sess.id}/messages", json={"content": "уборка после ремонта квартиры"}
+    )
+    await session.refresh(sess)
+    assert sess.flow_state is not None
+    assert sess.flow_state["category"] == "CLEANING"  # не переключились на REPAIR
+
+
 async def test_pii_in_flow_state_is_masked(
     make_client: MakeClient,
     make_principal: MakePrincipal,

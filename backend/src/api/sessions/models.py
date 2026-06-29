@@ -16,7 +16,18 @@ import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, Index, String, Text, func, text
+from sqlalchemy import (
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -80,6 +91,13 @@ class AgentSession(Base, TimestampMixin):
     # диалоговая память + ссылки, НЕ доменное состояние (авторитет — статус kb-partners).
     # NULL → не идёт сбор полей заявки.
     flow_state: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+    # Счётчик подряд идущих low-confidence уточнений (ERR-30): повтор низкой
+    # уверенности → handoff («≤1 уточняющий вопрос, затем человек», доктрина).
+    # Сбрасывается на любом не-low-confidence исходе общего хода.
+    low_confidence_streak: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
 
     # Сквозной correlation_id создающего запроса (NFR-13 трассировка).
     correlation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -29,6 +29,7 @@ class DecisionReason(str, enum.Enum):
     AUTONOMOUS_OK = "AUTONOMOUS_OK"  # действие разрешено матрицей §7.1
     PAID_NEEDS_CONFIRMATION = "PAID_NEEDS_CONFIRMATION"  # FR-7.4: подтверждение пользователя
     LOW_CONFIDENCE = "LOW_CONFIDENCE"  # ниже порога → уточнение (G6)
+    LOW_CONFIDENCE_EXHAUSTED = "LOW_CONFIDENCE_EXHAUSTED"  # повтор низкой уверенности → handoff
     MANDATORY_HANDOFF_CLAIM = "MANDATORY_HANDOFF_CLAIM"  # претензия/спор → человек
     MONEY_NEVER_AUTONOMOUS = "MONEY_NEVER_AUTONOMOUS"  # G1: деньги/выплаты — никогда сам
     IRREVERSIBLE_HANDOFF = "IRREVERSIBLE_HANDOFF"  # G5: необратимое вне матрицы → человек

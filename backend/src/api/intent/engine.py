@@ -125,6 +125,28 @@ def _intent_scores(text: str) -> dict[Intent, int]:
     }
 
 
+def category_scores(text: str) -> dict[str, int]:
+    """Счёт совпадений ключевых слов по категориям партнёрской услуги (lower-case вход).
+
+    Публичный helper (без дублирования keyword-карты): используется и при извлечении
+    слота `category`, и при детекции коррекции категории в order-flow (ERR-02).
+    """
+    return {
+        category: sum(text.count(kw) for kw in kws) for category, kws in _PARTNER_CATEGORY.items()
+    }
+
+
+def negates_category(text: str, category: str) -> bool:
+    """Текст явно отрицает категорию (`не <ключевое слово>`) — сигнал коррекции (ERR-02).
+
+    `text` — lower-case. Пример: «это ремонт, не уборка» отрицает CLEANING.
+    """
+    for kw in _PARTNER_CATEGORY.get(category, ()):
+        if re.search(r"не\s+" + re.escape(kw), text):
+            return True
+    return False
+
+
 def _extract_slots(text: str, intent: Intent) -> dict[str, Any]:
     """Лёгкое извлечение слотов (FR-5.3): площадь; категория для партнёрской услуги."""
     slots: dict[str, Any] = {}
@@ -132,10 +154,7 @@ def _extract_slots(text: str, intent: Intent) -> dict[str, Any]:
     if area_match is not None:
         slots["area_sqm"] = int(area_match.group(1))
     if intent is Intent.PARTNER_SERVICE:
-        cat_scores = {
-            category: sum(text.count(kw) for kw in kws)
-            for category, kws in _PARTNER_CATEGORY.items()
-        }
+        cat_scores = category_scores(text)
         best = max(cat_scores, key=lambda c: cat_scores[c])
         if cat_scores[best] > 0:
             slots["category"] = best
