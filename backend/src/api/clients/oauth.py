@@ -85,17 +85,26 @@ class TokenExchangeProvider:
         token_url: str,
         client_id: str,
         client_secret: str,
+        audience: str = "",
         timeout: float = 5.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._token_url = token_url
         self._client_id = client_id
         self._client_secret = client_secret
+        # Целевая аудитория downstream-соседа (CC-1 per-audience). Без неё Keycloak
+        # проставляет aud только из хардкод-мапперов m2m-клиента → обменянный токен
+        # несёт ВСЕ aud и реиграбелен между соседями (replay). `audience` в запросе
+        # обмена сужает токен до конкретного получателя. Пусто → прежнее поведение.
+        self._audience = audience
         self._timeout = timeout
         self._transport = transport
 
     async def exchange(self, *, subject_token: str, requested_subject: str) -> str:
-        """Обменять m2m-токен агента на делегированный токен (от имени requested_subject)."""
+        """Обменять m2m-токен агента на делегированный токен (от имени requested_subject).
+
+        При заданной `audience` токен сужается до конкретного соседа (anti-replay, CC-1).
+        """
         data = {
             "grant_type": _TOKEN_EXCHANGE_GRANT,
             "client_id": self._client_id,
@@ -104,6 +113,8 @@ class TokenExchangeProvider:
             "subject_token_type": _ACCESS_TOKEN_TYPE,
             "requested_subject": requested_subject,
         }
+        if self._audience:
+            data["audience"] = self._audience
         payload = await _post_token(self._token_url, data, self._timeout, self._transport)
         return str(payload["access_token"])
 

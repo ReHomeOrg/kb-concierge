@@ -59,7 +59,9 @@ async def get_handoff_service(
                     HttpKbSupportClient(
                         http_client=build_resilient_client("kb_support", http, settings),
                         token_provider=build_token_provider(
-                            settings, fallback_token=settings.kb_support_api_token
+                            settings,
+                            fallback_token=settings.kb_support_api_token,
+                            audience=settings.oauth_audience_kb_support,
                         ),
                     )
                 )

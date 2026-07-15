@@ -63,7 +63,9 @@ async def get_reasoning_loop() -> AsyncIterator[ReasoningLoop]:
                         http_client=build_resilient_client("kb_search", http, settings),
                         token_provider=DelegatedUserTokenProvider(
                             build_token_provider(
-                                settings, fallback_token=settings.kb_search_api_token
+                                settings,
+                                fallback_token=settings.kb_search_api_token,
+                                audience=settings.oauth_audience_kb_search,
                             )
                         ),
                         cache=_TOOL_CACHE,
@@ -79,7 +81,9 @@ async def get_reasoning_loop() -> AsyncIterator[ReasoningLoop]:
                             http_client=build_resilient_client("kb_chat", http, settings),
                             token_provider=DelegatedUserTokenProvider(
                                 build_token_provider(
-                                    settings, fallback_token=settings.kb_search_api_token
+                                    settings,
+                                    fallback_token=settings.kb_search_api_token,
+                                    audience=settings.oauth_audience_kb_search,
                                 )
                             ),
                         )
@@ -96,7 +100,9 @@ async def get_reasoning_loop() -> AsyncIterator[ReasoningLoop]:
                     HttpPlatformClient(
                         http_client=build_resilient_client("platform", phttp, settings),
                         token_provider=build_token_provider(
-                            settings, fallback_token=settings.platform_api_token
+                            settings,
+                            fallback_token=settings.platform_api_token,
+                            audience=settings.oauth_audience_platform,
                         ),
                         cache=_TOOL_CACHE,
                         cache_ttl_seconds=settings.client_cache_ttl_seconds,
@@ -123,7 +129,11 @@ async def _register_support_tools(
     )
     client = HttpKbSupportClient(
         http_client=build_resilient_client("kb_support", http, settings),
-        token_provider=build_token_provider(settings, fallback_token=settings.kb_support_api_token),
+        token_provider=build_token_provider(
+            settings,
+            fallback_token=settings.kb_support_api_token,
+            audience=settings.oauth_audience_kb_support,
+        ),
     )
     registry.register(SupportCreateTicketTool(client))
     registry.register(SupportAddMessageTool(client))
@@ -142,7 +152,9 @@ async def _register_partners_tools(
     client = HttpKbPartnersClient(
         http_client=build_resilient_client("kb_partners", http, settings),
         token_provider=build_token_provider(
-            settings, fallback_token=settings.kb_partners_api_token
+            settings,
+            fallback_token=settings.kb_partners_api_token,
+            audience=settings.oauth_audience_kb_partners,
         ),
     )
     registry.register(PartnersCreateRequestTool(client))
