@@ -107,7 +107,7 @@ def test_build_token_provider_threads_audience_into_exchange() -> None:
     settings = Settings(oauth_token_url=_URL, oauth_client_id="agent", oauth_client_secret="s")
     provider = build_token_provider(settings, audience="kb-partners")
     assert isinstance(provider, OAuth2TokenProvider)
-    assert provider._exchange._audience == "kb-partners"  # type: ignore[attr-defined]
+    assert provider._exchange._audience == "kb-partners"
 
 
 async def test_oauth2_provider_m2m_without_delegation() -> None:
