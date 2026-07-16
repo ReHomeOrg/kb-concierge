@@ -107,6 +107,18 @@ class Settings(BaseSettings):
     oauth_client_id: str = Field(default="", description="client_id сервис-принципала агента.")
     oauth_client_secret: str = Field(default="", description="client_secret (kb-vault).")
 
+    # Целевая аудитория per-downstream для token-exchange (CC-1 anti-replay): обменянный
+    # токен сужается до конкретного соседа. Значения = ожидаемый `aud` у соседа (мапперы
+    # Keycloak). Переопределяемы через env; дефолты совпадают с идентификаторами соседей.
+    oauth_audience_kb_support: str = Field(default="kb-support", description="aud для kb-support.")
+    oauth_audience_kb_partners: str = Field(
+        default="kb-partners", description="aud для kb-partners."
+    )
+    oauth_audience_kb_search: str = Field(default="kb-search", description="aud для kb-search.")
+    oauth_audience_platform: str = Field(
+        default="rehome-platform", description="aud для rehome-platform."
+    )
+
     # --- HTTP-клиенты к соседям-инструментам (resilience). Базовые URL — по мере
     # подключения инструментов (M3+). Параметры устойчивости общие (NFR-9). ---
     redis_url: str = Field(

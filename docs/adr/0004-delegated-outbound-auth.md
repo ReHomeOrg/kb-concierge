@@ -52,8 +52,9 @@ m2m-токен при неудаче обмена НЕТ**: иначе аген�
   тесты — на `httpx.MockTransport` (без сети). Живая проверка — при наличии Keycloak-realm
   и кредов (ops, как YandexGPT ADR-0003).
 - **Realm-конфиг — зона ops:** имена actor-claim (`kbp_act_sub` и аналоги), аудитория токена
-  per-downstream и политики token-exchange настраиваются в Keycloak. Per-audience scoping
-  (`audience` в exchange) — следующий шаг при провижининге realm, на контракт кода не влияет.
+  per-downstream и политики token-exchange настраиваются в Keycloak. ~~Per-audience scoping
+  (`audience` в exchange) — следующий шаг при провижининге realm, на контракт кода не влияет.~~
+  → *см. Дополнение (2026-07-16): per-audience ПОТРЕБОВАЛ правки кода.*
 - Закрывает CC-1 у partners/support/search (issue #12). rehome.one — после получения
   контракта (issue #16).
 
@@ -62,3 +63,22 @@ m2m-токен при неудаче обмена НЕТ**: иначе аген�
 - **Оставить `X-On-Behalf-Of`** — соседи не читают; делегирование не работает (G2/G7).
 - **Откат на m2m при сбое обмена** — агент получил бы права шире пользовательских (нарушение G2/G7).
 - **Вендорский OAuth-SDK** — лишняя зависимость, правило 6; свой HTTP-адаптер проще тестировать.
+
+## Дополнение (2026-07-16) — per-audience реализован в коде (PR #39)
+
+Ревью CC-1 (finding B) показало: исходно `TokenExchangeProvider.exchange()` слал только
+`requested_subject`, БЕЗ `audience`/`scope`. Без `audience` в запросе Keycloak проставляет
+`aud` только из хардкод-мапперов клиента `kb-concierge-m2m` → обменянный делегированный токен
+несёт ВСЕ аудитории и **реиграбелен между соседями** (replay). Поэтому исходная оценка
+«per-audience на контракт кода не влияет» — **неверна**.
+
+Реализовано (PR #39): `exchange()` кладёт `audience` в запрос при непустом значении;
+`build_token_provider(…, audience)` пробрасывает его; `config.py` — карта сосед→audience
+(`oauth_audience_kb_support`/`_kb_partners`/`_kb_search`/`_platform`, override `KBC_OAUTH_AUDIENCE_*`);
+audience задаётся per-downstream в точках сборки провайдера (reasoning/handoff). Пусто →
+прежнее поведение (обратная совместимость с dev `StaticTokenProvider`).
+
+Остаётся зоной ops (без влияния на код): аудитория-мапперы соседей + **token-exchange
+permission на каждый aud** — должны настраиваться **синхронно** с боевым включением, иначе
+Keycloak вернёт 400 на обмене → деградация в `unavailable` (fail-closed). Имя actor-claim
+(`kbp_act_sub` vs стандарт RFC 8693 `act.sub`) — открытый кросс-командный вопрос.

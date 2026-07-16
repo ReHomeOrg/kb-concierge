@@ -91,9 +91,14 @@ class DelegatedUserTokenProvider:
         return await self._base.get_token(on_behalf_of=on_behalf_of)
 
 
-def build_token_provider(settings: Settings, *, fallback_token: str = "") -> TokenProvider:
+def build_token_provider(
+    settings: Settings, *, fallback_token: str = "", audience: str = ""
+) -> TokenProvider:
     """Выбрать провайдер токена. Боевой `OAuth2TokenProvider` при заполненном oauth-конфиге
     (token_url/client_id/client_secret); иначе — `StaticTokenProvider(fallback_token)` (dev/test).
+
+    `audience` — целевой downstream-сосед (CC-1 per-audience): сужает делегированный
+    токен до конкретного получателя (anti-replay). Пусто → aud только из мапперов клиента.
     """
     if settings.oauth_token_url and settings.oauth_client_id and settings.oauth_client_secret:
         from api.clients.oauth import ClientCredentialsTokenProvider, TokenExchangeProvider
@@ -107,7 +112,11 @@ def build_token_provider(settings: Settings, *, fallback_token: str = "") -> Tok
                 token_url=url, client_id=cid, client_secret=secret, timeout=timeout
             ),
             exchange=TokenExchangeProvider(
-                token_url=url, client_id=cid, client_secret=secret, timeout=timeout
+                token_url=url,
+                client_id=cid,
+                client_secret=secret,
+                audience=audience,
+                timeout=timeout,
             ),
         )
     return StaticTokenProvider(fallback_token)

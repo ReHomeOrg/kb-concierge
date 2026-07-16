@@ -85,6 +85,29 @@ async def test_token_exchange_sends_requested_subject() -> None:
     assert seen[0]["grant_type"][0].endswith("token-exchange")
     assert seen[0]["subject_token"] == ["m2m-token"]
     assert seen[0]["requested_subject"] == ["user-7"]
+    assert "audience" not in seen[0]  # audience не задана → не шлём (прежнее поведение)
+
+
+async def test_token_exchange_sends_audience_when_set() -> None:
+    """CC-1 per-audience: заданная audience уходит в запрос обмена (anti-replay)."""
+    seen: list[dict[str, list[str]]] = []
+    provider = TokenExchangeProvider(
+        token_url=_URL,
+        client_id="agent",
+        client_secret="s",
+        audience="kb-support",
+        transport=_grant_aware_transport(seen),
+    )
+    await provider.exchange(subject_token="m2m-token", requested_subject="user-7")
+    assert seen[0]["audience"] == ["kb-support"]
+
+
+def test_build_token_provider_threads_audience_into_exchange() -> None:
+    """build_token_provider(audience=...) → exchange-провайдер несёт audience этого соседа."""
+    settings = Settings(oauth_token_url=_URL, oauth_client_id="agent", oauth_client_secret="s")
+    provider = build_token_provider(settings, audience="kb-partners")
+    assert isinstance(provider, OAuth2TokenProvider)
+    assert provider._exchange._audience == "kb-partners"
 
 
 async def test_oauth2_provider_m2m_without_delegation() -> None:
