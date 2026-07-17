@@ -16,7 +16,18 @@ import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, Index, String, Text, func
+from sqlalchemy import (
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -75,6 +86,24 @@ class AgentSession(Base, TimestampMixin):
     # query (G3). NULL → нет ожидающего подтверждения.
     pending_action: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
+    # Контекст слот-филлинга заявки на услугу (R1, документ «правила обработки заявок»):
+    # {category, answers, asking, original_masked}. ТОЛЬКО маскированные значения (G3) —
+    # диалоговая память + ссылки, НЕ доменное состояние (авторитет — статус kb-partners).
+    # NULL → не идёт сбор полей заявки.
+    flow_state: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+    # Счётчик подряд идущих low-confidence уточнений (ERR-30): повтор низкой
+    # уверенности → handoff («≤1 уточняющий вопрос, затем человек», доктрина).
+    # Сбрасывается на любом не-low-confidence исходе общего хода.
+    low_confidence_streak: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    # Ссылки на последние созданные сущности соседей в этой сессии (#4): {partner_request_id,
+    # partner_number, support_ticket_id, support_number}. Нужны, чтобы отвечать на «что с
+    # моей заявкой?» (read-only get_status). Только идентификаторы/номера, без ПДн (G3).
+    # NULL → в сессии ещё ничего не оформлено.
+    last_refs: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
     # Сквозной correlation_id создающего запроса (NFR-13 трассировка).
     correlation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
@@ -118,9 +147,38 @@ class AgentTurn(Base):
     intent_trace: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     correlation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Идемпотентность inbound (ERR-18): стабильный ключ от источника (kb-support).
+    # Повторный вебхук с тем же ключом не дублирует реплику. NULL для обычных turn'ов
+    # (агент/пользователь) — partial-unique индекс распространяется только на не-NULL.
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     ts: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
     )
+
+    __table_args__ = (
+        Index(
+            "uq_agent_turns_session_idempotency",
+            "session_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+    )
+
+
+class UserPreference(Base, TimestampMixin):
+    """Предпочтения пользователя между сессиями (#3): «как обычно».
+
+    Своя БД (арх-константа): ключ — `user_id` (sub из JWT, строковая ссылка, не FK).
+    `prefs` JSONB: {category, fields:{<стабильный ключ §3>: значение}} — ТОЛЬКО
+    маскированные/неденежные значения (G3/G1), диалоговая память, не доменное состояние.
+    Анонимные сессии предпочтений не имеют. Чистится при праве на забвение.
+    """
+
+    __tablename__ = "user_preferences"
+
+    user_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    prefs: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 
 
 class AuditLog(Base):

@@ -41,6 +41,30 @@ class CitationOut(BaseModel):
     url: str | None = None
 
 
+class ProposedActionOut(BaseModel):
+    """Структурная сводка предлагаемого действия (#7): карточка «что оформляем».
+
+    `kind` — вид (partner_request); `category` — категория услуги; `fields` — собранные
+    обязательные поля §3 (маскированы, G3); `address` — адрес объекта из карточки (#1),
+    None если недоступен. Транзитная: отдаётся в ответе хода, в БД не персистится.
+    """
+
+    kind: str
+    category: str | None = None
+    fields: dict[str, str] = Field(default_factory=dict)
+    address: str | None = None
+    # Оценка от kb-partners (#12): диапазон цены/срока. None, если оценка недоступна.
+    price_range: str | None = None
+    eta: str | None = None
+
+
+class OptionOut(BaseModel):
+    """Тапаемый вариант ответа для UI (#10): id + подпись."""
+
+    id: str
+    label: str
+
+
 class TurnRead(BaseModel):
     """Реплика диалога в ответе API (видна владельцу/оператору)."""
 
@@ -50,10 +74,12 @@ class TurnRead(BaseModel):
     intent: str | None = None
     confidence: float | None = None
     ts: datetime.datetime
-    # Транзитные поля хода (не из БД): структурные цитаты ответа KB и признак
-    # ожидания подтверждения write-действия (FR-7.4). Пустые для истории сессии.
+    # Транзитные поля хода (не из БД): структурные цитаты ответа KB, признак ожидания
+    # подтверждения write-действия (FR-7.4) и сводка предложения (#7). Пустые для истории.
     citations: list[CitationOut] = Field(default_factory=list)
     awaiting_confirmation: bool = False
+    summary: ProposedActionOut | None = None
+    options: list[OptionOut] = Field(default_factory=list)
 
     @classmethod
     def from_orm_turn(cls, turn: AgentTurn) -> TurnRead:

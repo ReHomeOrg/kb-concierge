@@ -24,16 +24,19 @@ SeedSession = Callable[..., Awaitable[AgentSession]]
 _MSGS = "/api/v1/concierge/sessions"
 
 
-async def test_partner_reply_asks_confirmation(
+async def test_partner_service_starts_field_gathering(
     make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession
 ) -> None:
-    # PARTNER высокой уверенности → TOOL_CALL + requires_confirmation (FR-7.4).
+    # PARTNER высокой уверенности → R1: сначала добор обязательных полей §3 (заявка
+    # не создаётся без полноты, A1); подтверждение — после сбора. Не handoff.
     principal = make_principal(PrincipalKind.USER)
     sess = await seed_session(user_id=str(principal.user_id))
     resp = await make_client(principal).post(
         f"{_MSGS}/{sess.id}/messages", json={"content": "нужна уборка квартиры"}
     )
-    assert "подтверд" in resp.json()["content"].lower()
+    body = resp.json()["content"].lower()
+    assert "?" in body  # уточняющий вопрос по полям (R1)
+    assert "специалист" not in body  # партнёрский маршрут, не эскалация
 
 
 async def test_money_routes_to_handoff(

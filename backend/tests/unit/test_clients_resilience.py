@@ -136,6 +136,36 @@ async def test_5xx_retried_then_external_error() -> None:
     assert calls["n"] == 3  # все попытки израсходованы
 
 
+async def test_429_retried_then_external_error() -> None:
+    # 429 Too Many Requests — rate-limit, ретраибелен с backoff (ERR-13).
+    calls = {"n": 0}
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(429)
+
+    client, http = _resilient(httpx.MockTransport(handler), attempts=3)
+    async with http:
+        with pytest.raises(ExternalServiceError):
+            await client.request("GET", "/x", operation="op")
+    assert calls["n"] == 3  # 429 ретраился, не passthrough
+
+
+async def test_429_recovers_on_retry() -> None:
+    # 429 на первой попытке, успех на второй → возвращаем 200, без ошибки.
+    calls = {"n": 0}
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(429) if calls["n"] == 1 else httpx.Response(200, json={"ok": 1})
+
+    client, http = _resilient(httpx.MockTransport(handler), attempts=3)
+    async with http:
+        resp = await client.request("GET", "/x", operation="op")
+        assert resp.status_code == 200
+    assert calls["n"] == 2
+
+
 async def test_transport_error_retried_then_external_error() -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("down")

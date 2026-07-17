@@ -37,7 +37,7 @@ class PolicyCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: str = Field(min_length=1, max_length=64)
-    confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    confidence_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
     rules: dict[str, Any] | None = None
     active: bool = False
 

@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     # --- Intent Router (E5). Порог уверенности: ниже → clarify/handoff (M5+). Выбор
     # LLM-провайдера; `null` → инертный (только rules). Боевой YandexGPT — ADR-0003. ---
     intent_confidence_threshold: float = Field(
-        default=0.7, ge=0.0, le=1.0, description="Порог уверенности маршрутизации."
+        default=0.75, ge=0.0, le=1.0, description="Порог уверенности маршрутизации (ТЗ Док.2)."
     )
     intent_llm_provider: str = Field(
         default="null", description="Провайдер распознавания намерения: null|yandexgpt."
@@ -152,6 +152,12 @@ class Settings(BaseSettings):
         default="", description="Base URL kb-partners (партнёрские заявки)."
     )
     kb_partners_api_token: str = Field(default="", description="Fallback-токен kb-partners (dev).")
+
+    # Ожидаемое время ответа специалиста при эскалации (#6): в реплике handoff, чтобы
+    # пользователь знал срок. Текст, не критпуть — правится без кода.
+    handoff_eta_text: str = Field(
+        default="в течение 15 минут", description="ETA ответа специалиста (реплика handoff, #6)."
+    )
 
     # --- Dramatiq-воркер (durable исходящие события, фоновые задачи). ПУСТОЙ
     # broker_url → StubBroker, акторы инертны (broker/worker поднимает ops). ---

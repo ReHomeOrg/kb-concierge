@@ -10,10 +10,11 @@ import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.sessions.models import AgentSession, AgentTurn, AuditLog
+from api.sessions.models import AgentSession, AgentTurn, AuditLog, UserPreference
 from api.webhooks.enums import OutboxStatus
 from api.webhooks.models import OutboxEvent
 
@@ -43,6 +44,16 @@ class SessionRepository:
     def add_turn(self, turn: AgentTurn) -> None:
         """Добавить реплику в текущую транзакцию (flush/commit — у сервиса)."""
         self._db.add(turn)
+
+    async def turn_by_idempotency_key(
+        self, session_id: uuid.UUID, idempotency_key: str
+    ) -> AgentTurn | None:
+        """Реплика, уже добавленная по этому ключу идемпотентности (ERR-18, inbound)."""
+        stmt = select(AgentTurn).where(
+            AgentTurn.session_id == session_id,
+            AgentTurn.idempotency_key == idempotency_key,
+        )
+        return (await self._db.execute(stmt)).scalar_one_or_none()
 
     async def flush_refresh(self, turn: AgentTurn) -> None:
         """Сбросить в БД и подгрузить server-side поля реплики (ts)."""
@@ -105,6 +116,24 @@ class SessionRepository:
                 correlation_id=correlation_id,
             )
         )
+
+    async def get_user_prefs(self, user_id: str) -> dict[str, Any] | None:
+        """Предпочтения пользователя между сессиями (#3); None — ещё нет."""
+        row = await self._db.get(UserPreference, user_id)
+        return dict(row.prefs) if row is not None else None
+
+    async def upsert_user_prefs(self, user_id: str, prefs: dict[str, Any]) -> None:
+        """Сохранить/обновить предпочтения (idempotent upsert по user_id). Commit — у сервиса."""
+        stmt = (
+            pg_insert(UserPreference)
+            .values(user_id=user_id, prefs=prefs)
+            .on_conflict_do_update(index_elements=["user_id"], set_={"prefs": prefs})
+        )
+        await self._db.execute(stmt)
+
+    async def delete_user_prefs(self, user_id: str) -> None:
+        """Удалить предпочтения пользователя (право на забвение, ФЗ-152)."""
+        await self._db.execute(delete(UserPreference).where(UserPreference.user_id == user_id))
 
     async def commit(self) -> None:
         await self._db.commit()
