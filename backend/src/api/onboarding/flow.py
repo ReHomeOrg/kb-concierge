@@ -35,6 +35,8 @@ class OnboardingStep:
     `requires` — id шагов-предусловий (prerequisite-guard). `done_flag` — имя статус-флага,
     истинность которого означает завершённость шага. `blocker_reason` — значение
     `contract_blocker_reason`, разблокируемое этим шагом (hook C25), или None.
+    `title`/`why` — человеческий копирайт (N5): что показать пользователю и одна фраза
+    «зачем это сейчас» (пусто → фолбэк на `target_action`).
     """
 
     step_id: str
@@ -44,6 +46,8 @@ class OnboardingStep:
     requires: tuple[str, ...]
     done_flag: str
     blocker_reason: str | None
+    title: str = ""
+    why: str = ""
 
 
 def _parse(data: Any) -> dict[str, tuple[OnboardingStep, ...]]:
@@ -66,6 +70,8 @@ def _parse(data: Any) -> dict[str, tuple[OnboardingStep, ...]]:
                 requires=tuple(str(r) for r in s.get("requires", [])),
                 done_flag=str(s["done_flag"]),
                 blocker_reason=(str(s["blocker_reason"]) if s.get("blocker_reason") else None),
+                title=str(s.get("title", "")),
+                why=str(s.get("why", "")),
             )
             # Ссылочная целостность: каждое предусловие обязано ссылаться на ПРЕДШЕСТВУЮЩИЙ
             # шаг той же роли. Ловит несуществующие/forward/циклические requires разом —

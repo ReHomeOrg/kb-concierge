@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.config import get_settings
 from api.db import get_session
 from api.intent.service import IntentService, build_intent_classifier
+from api.onboarding.status import NullStatusReader, OnboardingStatusReader
 from api.policy.matrix import AutonomyMatrix
 from api.policy.repository import PolicyRepository
 from api.policy.service import PolicyService
@@ -53,3 +54,10 @@ def _shared_rate_limiter() -> RateLimiter:
 def get_rate_limiter() -> RateLimiter:
     """Лимитер публичного входа (NFR-12). Тесты переопределяют через dependency_overrides."""
     return _shared_rate_limiter()
+
+
+def get_onboarding_status_reader() -> OnboardingStatusReader:
+    """Reader статуса онбординга. Дефолт — `NullStatusReader` (статус неизвестен → гид в
+    режиме ПУТИ). Боевое делегированное чтение платформы (CC-1/#16) подменит его позже;
+    тесты переопределяют через `app.dependency_overrides`."""
+    return NullStatusReader()

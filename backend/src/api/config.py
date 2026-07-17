@@ -142,6 +142,11 @@ class Settings(BaseSettings):
     kb_rag_answer_enabled: bool = Field(
         default=False, description="INFO_QA через RAG-синтез (kb.answer) вместо цитат kb.search."
     )
+    onboarding_enabled: bool = Field(
+        default=False,
+        description="Онбординг-гид (read-only поверхность next-step, GET .../onboarding). "
+        "OFF по умолчанию; статус-чтение платформы — за CC-1/#16 (до него режим ПУТИ).",
+    )
     platform_api_base_url: str = Field(default="", description="Base URL rehome.one (контекст).")
     platform_api_token: str = Field(default="", description="Fallback-токен rehome.one (dev).")
     kb_support_api_base_url: str = Field(

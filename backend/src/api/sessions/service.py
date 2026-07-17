@@ -38,6 +38,9 @@ from api.observability.agent_metrics import (
     record_policy,
 )
 from api.observability.pii_mask import mask_pii
+from api.onboarding.constants import ONBOARDING_ROLES
+from api.onboarding.guide import OnboardingGuide, build_guide
+from api.onboarding.status import OnboardingStatusReader
 from api.orders import (
     ORDER_CATEGORIES,
     OrderAction,
@@ -223,6 +226,36 @@ class SessionService:
             raise ProblemException.not_found(detail="Session not found")
         turns = await self._repo.list_turns(session_id)
         return session, turns
+
+    async def onboarding_guide(
+        self,
+        principal: Principal,
+        session_id: uuid.UUID,
+        role: str,
+        status_reader: OnboardingStatusReader,
+    ) -> OnboardingGuide | None:
+        """Read-only гид онбординга (STATE-triggered поверхность, «один экран за раз»).
+
+        Config-gated (`onboarding_enabled`): выключено → None (фича недоступна). Self-scoped:
+        сессия читается в контексте владельца, невидимая → 404 (анти-enumeration). Статус
+        шагов — через seam `status_reader` (боевое делегированное чтение платформы за CC-1/#16);
+        `None` → гид в режиме ПУТИ (не утверждаем позицию, FR-6.6). Неизвестная роль → None.
+        Ничего НЕ пишет и НЕ одобряет (G-verification-ceiling): только маршрутизирует к экрану.
+        """
+        if not self._settings.onboarding_enabled:
+            return None
+        if role not in ONBOARDING_ROLES:
+            return None
+        session = await self._repo.get(session_id)
+        if session is None or not can_access(principal, session):
+            raise ProblemException.not_found(detail="Session not found")
+        context = ToolContext(
+            on_behalf_of=session.user_id,
+            correlation_id=session.correlation_id,
+            session_id=str(session.id),
+        )
+        status = await status_reader.read(role, context)
+        return build_guide(role, status)
 
     async def post_message(
         self,

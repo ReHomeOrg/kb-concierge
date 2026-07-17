@@ -23,13 +23,20 @@ from api.onboarding.flow import (
     step_for_blocker,
     steps_for,
 )
+from api.onboarding.guide import OnboardingGuide, build_guide, guide_for_blocker
+from api.onboarding.status import NullStatusReader, OnboardingStatusReader
 
 __all__ = [
     "ONBOARDING_ROLES",
+    "NullStatusReader",
+    "OnboardingGuide",
+    "OnboardingStatusReader",
     "OnboardingStep",
     "ROLE_OWNER",
     "ROLE_TENANT",
+    "build_guide",
     "completed_step_ids",
+    "guide_for_blocker",
     "is_complete",
     "next_step",
     "progress",
