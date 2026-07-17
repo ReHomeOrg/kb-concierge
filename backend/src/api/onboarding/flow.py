@@ -55,8 +55,10 @@ def _parse(data: Any) -> dict[str, tuple[OnboardingStep, ...]]:
         raise ValueError("onboarding flow has no roles")
     flows: dict[str, tuple[OnboardingStep, ...]] = {}
     for role, spec in roles_raw.items():
-        steps = tuple(
-            OnboardingStep(
+        steps: list[OnboardingStep] = []
+        seen_ids: set[str] = set()
+        for s in spec["steps"]:
+            step = OnboardingStep(
                 step_id=str(s["step_id"]),
                 role=str(role),
                 target_action=str(s["target_action"]),
@@ -65,11 +67,21 @@ def _parse(data: Any) -> dict[str, tuple[OnboardingStep, ...]]:
                 done_flag=str(s["done_flag"]),
                 blocker_reason=(str(s["blocker_reason"]) if s.get("blocker_reason") else None),
             )
-            for s in spec["steps"]
-        )
+            # Ссылочная целостность: каждое предусловие обязано ссылаться на ПРЕДШЕСТВУЮЩИЙ
+            # шаг той же роли. Ловит несуществующие/forward/циклические requires разом —
+            # иначе шаг стал бы вечно недостижимым → тупик/ложное завершение (нарушение
+            # G-no-dead-end / G-no-fake-complete). Порядок массива = порядок опроса.
+            for req in step.requires:
+                if req not in seen_ids:
+                    raise ValueError(
+                        f"onboarding role {role}: step {step.step_id} requires "
+                        f"unknown/forward step {req!r}"
+                    )
+            seen_ids.add(step.step_id)
+            steps.append(step)
         if not steps:
             raise ValueError(f"onboarding role {role} has no steps")
-        flows[str(role)] = steps
+        flows[str(role)] = tuple(steps)
     return flows
 
 
@@ -109,6 +121,8 @@ def next_step(role: str, status: Mapping[str, bool]) -> OnboardingStep | None:
 
     None → полная верификация достигнута (COMPLETE) ЛИБО роль неизвестна.
     prerequisite-guard: шаг с невыполненным `requires` не возвращается (нет тупика).
+    Последовательность опроса держится ПОРЯДКОМ массива шагов; `requires` кодирует лишь
+    жёсткие зависимости (напр. O4 «ЕГРН» → O3 «объект»), проверенные при загрузке.
     """
     done = set(completed_step_ids(role, status))
     for step in steps_for(role):

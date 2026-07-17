@@ -134,6 +134,12 @@ def test_step_for_blocker_unknown_reason_is_none() -> None:
     assert step_for_blocker(ROLE_TENANT, "NOPE") is None
 
 
+def test_step_for_blocker_cross_role_isolation() -> None:
+    # blocker чужой роли не матчится (изоляция веток).
+    assert step_for_blocker(ROLE_OWNER, BLOCKER_SOLVENCY_NOT_CONFIRMED) is None
+    assert step_for_blocker(ROLE_TENANT, BLOCKER_OWNER_KYC_REQUIRED) is None
+
+
 # --- неизвестная роль (graceful) ------------------------------------------
 
 
@@ -172,3 +178,69 @@ def test_parse_rejects_bad_structure() -> None:
         _parse({"roles": {}})  # нет ролей
     with pytest.raises(ValueError):
         _parse({"roles": {"tenant": {"steps": []}}})  # роль без шагов
+
+
+def test_parse_rejects_forward_or_unknown_requires() -> None:
+    # Ссылочная целостность: requires обязан ссылаться на ПРЕДШЕСТВУЮЩИЙ шаг
+    # (иначе шаг вечно недостижим → тупик/ложное завершение).
+    def _step(sid: str, requires: list[str]) -> dict[str, object]:
+        return {
+            "step_id": sid,
+            "target_action": "A",
+            "screen_ref": "x",
+            "requires": requires,
+            "done_flag": "account",
+            "blocker_reason": None,
+        }
+
+    with pytest.raises(ValueError):  # ссылка на несуществующий шаг
+        _parse({"roles": {"tenant": {"steps": [_step("A", ["ZZ"])]}}})
+    with pytest.raises(ValueError):  # forward-ссылка (B объявлен позже)
+        _parse({"roles": {"tenant": {"steps": [_step("A", ["B"]), _step("B", [])]}}})
+    with pytest.raises(ValueError):  # самоссылка (цикл)
+        _parse({"roles": {"tenant": {"steps": [_step("A", ["A"])]}}})
+
+
+def test_load_flows_valid_override_applies(tmp_path: Path) -> None:
+    import json
+
+    override = {
+        "roles": {
+            "tenant": {
+                "steps": [
+                    {
+                        "step_id": "X1",
+                        "target_action": "Custom",
+                        "screen_ref": "custom",
+                        "requires": [],
+                        "done_flag": "account",
+                        "blocker_reason": None,
+                    }
+                ]
+            }
+        }
+    }
+    path = tmp_path / "ok.json"
+    path.write_text(json.dumps(override), encoding="utf-8")
+    flows = load_flows(str(path))  # валидный override ПРИМЕНЯЕТСЯ (не bundled)
+    assert list(flows) == ["tenant"]
+    assert flows["tenant"][0].step_id == "X1"
+
+
+def test_bundled_done_flags_match_constants() -> None:
+    # Связка констант ↔ конфиг: все done_flag встроенного автомата — известные FLAG_*
+    # (ловит дрейф при переименовании флага в JSON).
+    from api.onboarding import constants as c
+
+    known = {
+        c.FLAG_ACCOUNT,
+        c.FLAG_PROFILE_COMPLETE,
+        c.FLAG_KYC_PASSED,
+        c.FLAG_SOLVENCY_CONFIRMED,
+        c.FLAG_OBJECT_ADDED,
+        c.FLAG_EGRN_VERIFIED,
+        c.FLAG_PAYOUT_SAVED,
+    }
+    for role in (ROLE_TENANT, ROLE_OWNER):
+        for step in steps_for(role):
+            assert step.done_flag in known, step.done_flag
