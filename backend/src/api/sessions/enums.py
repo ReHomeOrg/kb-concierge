@@ -58,6 +58,7 @@ class AuditAction(str, enum.Enum):
     ACTION_TAKEN = "ACTION_TAKEN"  # §6.1: исполнено write-действие после согласия (M7)
     ORDER_FIELD_REQUESTED = "ORDER_FIELD_REQUESTED"  # R1: запрошено обязательное поле заявки
     ORDER_RECLASSIFIED = "ORDER_RECLASSIFIED"  # ERR-02: смена категории заявки в середине сбора
+    EMERGENCY_DETECTED = "EMERGENCY_DETECTED"  # авария: распознана ситуация, выдан плейбук
     AGENT_RESPONDED = "AGENT_RESPONDED"
     HANDOFF_CREATED = "HANDOFF_CREATED"  # §7.3: эскалация человеку в kb-support (M6, FR-7.1)
     OPERATOR_REPLIED = "OPERATOR_REPLIED"  # §7.3: ответ оператора возвращён в диалог (M6, FR-7.2)

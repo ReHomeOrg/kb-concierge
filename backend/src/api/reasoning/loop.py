@@ -70,6 +70,7 @@ _STATUS_UNAVAILABLE_REPLY = (
     "Не получилось узнать статус прямо сейчас — сервис временно недоступен. "
     "Попробуйте чуть позже или я передам вопрос специалисту."
 )
+_PLATFORM_GET_CONTEXT = "platform.get_context"
 
 # FR-7.4: предложение платного/необратимого действия + запрос явного согласия.
 _PROPOSE_PARTNER_REPLY = (
@@ -340,6 +341,27 @@ class ReasoningLoop:
         except Exception:
             return False
         return not result.unavailable
+
+    async def fetch_management_contact(self, context: ToolContext) -> str | None:
+        """Телефон УК/аварийной службы дома из карточки объekta (аварийный плейбук, read-only).
+
+        Для ЕДИНСТВЕННОГО объекта пользователя. Деградация (нет инструмента/делегирования/
+        несколько-ноль объектов/недоступность/нет поля) → None (FR-6.6): плейбук даёт
+        обобщённую формулировку про УК. Публичный контакт службы, не ПДн пользователя.
+        """
+        if context.on_behalf_of is None or self._registry.get(_PLATFORM_GET_CONTEXT) is None:
+            return None
+        try:
+            result = await self._registry.call(_PLATFORM_GET_CONTEXT, {}, context)
+        except Exception:
+            return None
+        if result.unavailable:
+            return None
+        premises = result.data.get("premises") or []
+        if len(premises) == 1 and isinstance(premises[0], dict):
+            contact = premises[0].get("management_contact")
+            return str(contact) if contact else None
+        return None
 
     async def _call_tool(
         self, name: str, payload: dict[str, Any], context: ToolContext

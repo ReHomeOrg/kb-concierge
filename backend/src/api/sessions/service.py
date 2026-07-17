@@ -15,6 +15,13 @@ from typing import Any
 from api.auth.principal import Principal, PrincipalKind
 from api.auth.system_actors import AGENT_ACTOR_ID
 from api.config import Settings
+from api.emergency import (
+    PARTNER_CREATE,
+    PARTNER_OFFER,
+    build_emergency_message,
+    classify_emergency,
+    entry_for,
+)
 from api.errors import ProblemException
 from api.handoff.service import HandoffService
 from api.intent.engine import category_scores, negates_category
@@ -23,6 +30,7 @@ from api.intent.service import IntentService
 from api.observability.agent_metrics import (
     record_action,
     record_confirmation,
+    record_emergency,
     record_feedback,
     record_intent,
     record_order_missing_field,
@@ -92,6 +100,14 @@ _FIELD_LABELS: dict[str, str] = {
     "problem_description": "описание",
     "access": "доступ",
 }
+# Категория REPAIR — в неё ведёт аварийный сценарий при согласии на мастера-партнёра.
+_REPAIR_CATEGORY = "REPAIR"
+# Отказ от заявки после аварийной подсказки: безопасность уже дана выше, повторяем спокойно.
+_EMERGENCY_DECLINE_REPLY = (
+    "Хорошо, заявку не оформляю. Если ситуация опасна — звоните в указанную аварийную "
+    "службу. Будут вопросы — обращайтесь."
+)
+_EMERGENCY_REASK_REPLY = "Оформить заявку мастеру-партнёру? Ответьте «да» или «нет»."
 
 
 @dataclass
@@ -257,7 +273,22 @@ class SessionService:
         # Ветвление: ожидающее подтверждение (FR-7.4) ИЛИ новая маршрутизация (M2→M4→M5).
         # `extra_audits` — действия агента (actor = SP агента); MESSAGE_RECEIVED — у актора.
         extra_audits: list[tuple[str, str | None, str | None]] = []
-        if session.pending_action is not None:
+        # Авария имеет ВЫСШИЙ приоритет (safety-first): новое сообщение об аварии перебивает
+        # любой текущий сбор/подтверждение. Если идёт ответ на аварийный вопрос — обрабатываем
+        # его (не запускаем новую аварию). Детекция дешёвая (rules), на каждом ходе.
+        em_type = classify_emergency(masked)
+        in_emergency = (
+            session.flow_state is not None and session.flow_state.get("kind") == "emergency"
+        )
+        if em_type is not None and not in_emergency:
+            reply, loop_result = await self._begin_emergency_flow(
+                session, em_type, masked, tool_context, reasoning_loop, user_turn, extra_audits
+            )
+        elif in_emergency:
+            reply, loop_result = await self._route_emergency_decision(
+                session, masked, user_turn, extra_audits
+            )
+        elif session.pending_action is not None:
             reply, loop_result = await self._resolve_pending(
                 session, masked, tool_context, reasoning_loop, user_turn, extra_audits
             )
@@ -879,6 +910,103 @@ class SessionService:
         user_turn.intent_trace = {"edit": {"field": None}}
         labels = ", ".join(_FIELD_LABELS.get(k, k) for k in required_keys(category))
         return f"Что изменить? Можно поправить: {labels}.", None
+
+    async def _begin_emergency_flow(
+        self,
+        session: AgentSession,
+        em_type: str,
+        masked: str,
+        tool_context: ToolContext,
+        reasoning_loop: ReasoningLoop,
+        user_turn: AgentTurn,
+        extra_audits: list[tuple[str, str | None, str | None]],
+    ) -> tuple[str, LoopResult | None]:
+        """Аварийная ситуация (плейбук): немедленное действие по безопасности + кому звонить
+        (единые номера + УК из карточки + указатели, БЕЗ интернет-поиска) + при применимости
+        предложение заявки партнёру (FR-7.4). Safety-first: перебивает любой текущий сбор.
+        """
+        entry = entry_for(em_type)
+        if entry is None:  # защитно (тип всегда из плейбука)
+            return _DEGRADED_REPLY, None
+        session.pending_action = None  # авария перебивает ожидающее подтверждение
+        uk_contact = await reasoning_loop.fetch_management_contact(tool_context)
+        reply = build_emergency_message(entry, uk_contact)
+        user_turn.intent = Intent.EMERGENCY.value
+        user_turn.intent_trace = {
+            "emergency": {"type": em_type, "partner_mode": entry.partner_mode, "scope": entry.scope}
+        }
+        record_emergency(em_type, entry.partner_mode)
+        record_action("answered")
+        extra_audits.append((AuditAction.EMERGENCY_DETECTED.value, em_type, entry.partner_mode))
+        # CREATE/OFFER → ждём решение о заявке. NONE (общедомовое/экстренные службы) —
+        # терминально: направили к ответственной службе, заявку партнёру не предлагаем.
+        if entry.partner_mode in (PARTNER_CREATE, PARTNER_OFFER):
+            session.flow_state = {
+                "kind": "emergency",
+                "type": em_type,
+                "partner_mode": entry.partner_mode,
+                "repair_subcategory": entry.repair_subcategory,
+                "original_masked": masked,
+            }
+        else:
+            session.flow_state = None
+        return reply, None
+
+    async def _route_emergency_decision(
+        self,
+        session: AgentSession,
+        masked: str,
+        user_turn: AgentTurn,
+        extra_audits: list[tuple[str, str | None, str | None]],
+    ) -> tuple[str, LoopResult | None]:
+        """Ответ на «оформить заявку мастеру?» после аварийной подсказки (FR-7.4).
+
+        Согласие → переход в обычный REPAIR-флоу (subcategory/описание предзаполнены, далее
+        дату/доступ доберёт `_route_order_flow`); отказ → закрыть (контакты уже даны выше);
+        неясно → переспрос. Заявка НЕ создаётся без явного согласия.
+        """
+        flow = dict(session.flow_state or {})
+        em_type = str(flow.get("type", ""))
+        subcategory = str(flow.get("repair_subcategory", ""))
+        original = str(flow.get("original_masked", ""))
+        verdict = detect_confirmation(masked)
+        record_confirmation(verdict.value.lower())
+        user_turn.intent = Intent.EMERGENCY.value
+
+        if verdict is Confirmation.YES:
+            answers: dict[str, str] = {"problem_description": original}
+            if subcategory:
+                answers["subcategory"] = subcategory
+            missing = missing_fields(_REPAIR_CATEGORY, answers)
+            next_field = missing[0] if missing else None
+            session.flow_state = (
+                {
+                    "category": _REPAIR_CATEGORY,
+                    "answers": answers,
+                    "asking": next_field,
+                    "original_masked": original,
+                }
+                if next_field is not None
+                else None
+            )
+            user_turn.intent_trace = {"emergency": {"type": em_type, "decision": "YES"}}
+            record_action("clarify")
+            if next_field is None:  # практически недостижимо (REPAIR требует дату/доступ)
+                return _FIELD_FALLBACK_REPLY, None
+            record_order_step(_REPAIR_CATEGORY, OrderAction.ASK_FIELDS.value)
+            record_order_missing_field(_REPAIR_CATEGORY, next_field)
+            extra_audits.append(
+                (AuditAction.ORDER_FIELD_REQUESTED.value, _REPAIR_CATEGORY, next_field)
+            )
+            return prompt_for(_REPAIR_CATEGORY, next_field) or _FIELD_FALLBACK_REPLY, None
+
+        user_turn.intent_trace = {"emergency": {"type": em_type, "decision": verdict.value}}
+        if verdict is Confirmation.NO:
+            session.flow_state = None
+            record_action("answered")
+            return _EMERGENCY_DECLINE_REPLY, None
+        record_action("clarify")
+        return _EMERGENCY_REASK_REPLY, None
 
     async def _resolve_pending(
         self,

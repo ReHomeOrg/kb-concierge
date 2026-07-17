@@ -50,6 +50,11 @@ AGENT_FEEDBACK = Counter(
     "Оценка пользователем решения после действия (#14)",
     ["verdict"],
 )
+AGENT_EMERGENCY = Counter(
+    "agent_emergency_total",
+    "Распознанные аварийные ситуации (плейбук): тип + режим партнёрской заявки",
+    ["type", "partner_mode"],
+)
 
 
 def record_intent(intent: str, method: str) -> None:
@@ -87,3 +92,8 @@ def record_order_missing_field(category: str, field: str) -> None:
 def record_feedback(verdict: str) -> None:
     """`verdict` ∈ positive/negative (#14)."""
     AGENT_FEEDBACK.labels(verdict=verdict).inc()
+
+
+def record_emergency(type_: str, partner_mode: str) -> None:
+    """Распознанная авария. Лейблы — только enum типа/режима (низкая кардинальность, G3)."""
+    AGENT_EMERGENCY.labels(type=type_, partner_mode=partner_mode).inc()

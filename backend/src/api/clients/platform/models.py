@@ -17,6 +17,10 @@ class Premises:
     premises_id: str
     address: str | None = None
     kind: str | None = None
+    # Контакт аварийной/управляющей службы дома (телефон диспетчера УК) — для аварийного
+    # плейбука (#аварии). Публичный контакт службы, не ПДн пользователя. None, если в
+    # карточке нет (тогда — обобщённая формулировка). Forward-compatible: сосед может не отдавать.
+    management_contact: str | None = None
 
 
 @dataclass(frozen=True)
