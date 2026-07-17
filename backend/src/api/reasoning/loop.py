@@ -18,11 +18,13 @@ from api.policy.engine import PolicyDecision
 from api.policy.enums import AgentActionKind
 from api.policy.guardrails import wrap_untrusted
 from api.reasoning.limits import Limits
+from api.reasoning.replies import REPLIES
 from api.tools.base import ToolContext
 from api.tools.registry import ToolRegistry
 
-_HANDOFF_REPLY = "Передаю ваше обращение специалисту — он скоро подключится."
-_CLARIFY_REPLY = "Уточните, пожалуйста, запрос — или выберите, что нужно:"
+# Тексты реплик хода — из конфига (replies_data.json, правятся без кода).
+_HANDOFF_REPLY = REPLIES["handoff"]
+_CLARIFY_REPLY = REPLIES["clarify"]
 # Умный CLARIFY (#10): вместо тупика — тапаемые варианты основных сценариев.
 _CLARIFY_OPTIONS: list[dict[str, str]] = [
     {"id": "info", "label": "Задать вопрос по базе знаний"},
@@ -30,14 +32,11 @@ _CLARIFY_OPTIONS: list[dict[str, str]] = [
     {"id": "status", "label": "Узнать статус заявки"},
     {"id": "operator", "label": "Связаться со специалистом"},
 ]
-_CONFIRM_REPLY = "Подготовил заявку. Подтвердите — и я передам её в работу."
-_PENDING_REPLY = "Принял, передаю запрос в обработку."
-_SMALL_TALK_REPLY = "Рад помочь! Чем могу быть полезен?"
-_OUT_OF_SCOPE_REPLY = "Это вне моей области, но помогу по аренде, услугам и поддержке."
-_DEFAULT_REPLY = "Принял ваше сообщение, обрабатываю запрос."
-_NO_ANSWER_REPLY = (
-    "Не нашёл точного ответа в базе знаний — уточните вопрос, или я передам его специалисту."
-)
+_PENDING_REPLY = REPLIES["pending"]
+_SMALL_TALK_REPLY = REPLIES["small_talk"]
+_OUT_OF_SCOPE_REPLY = REPLIES["out_of_scope"]
+_DEFAULT_REPLY = REPLIES["default"]
+_NO_ANSWER_REPLY = REPLIES["no_answer"]
 
 _KB_SEARCH = "kb.search"
 _KB_ANSWER = "kb.answer"
@@ -72,18 +71,12 @@ _STATUS_UNAVAILABLE_REPLY = (
 )
 _PLATFORM_GET_CONTEXT = "platform.get_context"
 
-# FR-7.4: предложение платного/необратимого действия + запрос явного согласия.
-_PROPOSE_PARTNER_REPLY = (
-    "Оформлю партнёрскую услугу по вашему запросу — это платная услуга партнёра "
-    "(стоимость подтвердит партнёр). Подтвердите, и я создам заявку."
-)
-_PROPOSE_DEFAULT_REPLY = "Подтвердите действие — и я выполню его."
-_DECLINE_REPLY = "Хорошо, отменил. Если понадобится — обращайтесь."
-_REASK_REPLY = "Нужно ваше подтверждение: оформляем заявку? Ответьте «да» или «нет»."
-_WRITE_UNAVAILABLE_REPLY = (
-    "Сейчас не получилось оформить — сервис временно недоступен. "
-    "Передам специалисту или попробуйте чуть позже."
-)
+# FR-7.4: предложение платного/необратимого действия + запрос явного согласия (из конфига).
+_PROPOSE_PARTNER_REPLY = REPLIES["propose_partner"]
+_PROPOSE_DEFAULT_REPLY = REPLIES["propose_default"]
+_DECLINE_REPLY = REPLIES["decline"]
+_REASK_REPLY = REPLIES["reask"]
+_WRITE_UNAVAILABLE_REPLY = REPLIES["write_unavailable"]
 
 
 @dataclass(frozen=True)
@@ -540,7 +533,7 @@ def _status_reply(data: dict[str, Any], kind: str) -> str:
 
 def _build_answer(data: dict[str, Any], citations: list[dict[str, Any]]) -> str:
     """Детерминированная сборка ответа из результатов KB (LLM-синтез — ADR-0003)."""
-    base = data.get("answer") or citations[0].get("snippet") or "Вот что удалось найти."
+    base = data.get("answer") or citations[0].get("snippet") or REPLIES["fallback_answer"]
     titles = ", ".join(str(c.get("title", "")) for c in citations[:3] if c.get("title"))
     return f"{base} (источники: {titles})" if titles else str(base)
 
