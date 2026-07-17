@@ -152,6 +152,48 @@ class HandoffService:
         handoff = await self._handoffs.latest_open_for_session(session_id)
         return handoff.target_ref if handoff is not None else None
 
+    async def status_update(
+        self,
+        *,
+        principal: Principal,
+        session_id: uuid.UUID,
+        text: str,
+        ref: str | None,
+        status: str | None,
+        correlation_id: str | None,
+    ) -> AgentTurn:
+        """Проактивное уведомление о статусе заявки в диалог (#5). Коммитит сам.
+
+        Сосед (SERVICE m2m) на смену статуса шлёт человекочитаемый `text`; добавляем его
+        системной репликой (`TurnRole.SYSTEM` — не ответ ИИ и не оператор). Активная
+        эскалация НЕ требуется (уведомление по любой заявке). Сессия отсутствует → 404.
+        ПДн в `content_masked` маскируются (G3)."""
+        session = await self._sessions.get_for_update(session_id)
+        if session is None:
+            raise ProblemException.not_found(detail="Session not found")
+
+        head = f"Заявка №{ref}: " if ref else ""
+        content = f"{head}{text}"
+        turn = AgentTurn(
+            session_id=session.id,
+            role=TurnRole.SYSTEM,
+            content=content,
+            content_masked=mask_pii(content),
+            correlation_id=correlation_id,
+        )
+        self._sessions.add_turn(turn)
+        self._sessions.add_audit(
+            session_id=session.id,
+            actor_id=principal.user_id,  # сервис-принципал соседа (источник уведомления)
+            action=AuditAction.STATUS_PUSHED.value,
+            from_value=ref,
+            to_value=status,
+            correlation_id=correlation_id,
+        )
+        await self._sessions.flush_refresh(turn)
+        await self._sessions.commit()
+        return turn
+
     async def escalate_in_turn(
         self, *, session: AgentSession, reason: str, correlation_id: str | None
     ) -> HandoffRecord:

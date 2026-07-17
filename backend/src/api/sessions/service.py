@@ -23,6 +23,7 @@ from api.intent.service import IntentService
 from api.observability.agent_metrics import (
     record_action,
     record_confirmation,
+    record_feedback,
     record_intent,
     record_order_missing_field,
     record_order_step,
@@ -36,12 +37,14 @@ from api.orders import (
     build_raw_input,
     extract_fields,
     missing_fields,
+    prompt_for,
     required_keys,
 )
 from api.policy.engine import PolicyDecision
 from api.policy.enums import AgentActionKind, DecisionReason
 from api.policy.service import PolicyService
-from api.reasoning.confirmation import Confirmation, detect_confirmation
+from api.reasoning.confirmation import Confirmation, detect_confirmation, detect_edit
+from api.reasoning.feedback import detect_feedback
 from api.reasoning.loop import LoopResult, ReasoningLoop
 from api.sessions.access import can_access, resolve_owner
 from api.sessions.enums import AuditAction, SessionStatus, TurnRole
@@ -69,6 +72,26 @@ _FORWARD_PENDING_REPLY = (
     "Ваше обращение уже у специалиста. Не получилось передать дополнение прямо сейчас — "
     "попробуйте чуть позже, либо дождитесь ответа."
 )
+# Быстрая оценка решения (#14): предложение после действия + ответы на оценку.
+_FEEDBACK_OFFER = " Помогло ли решение? Напишите «помогло» или «не помогло»."
+_FEEDBACK_THANKS = "Спасибо за оценку! Обращайтесь, если понадобится ещё."
+_FEEDBACK_SORRY = "Жаль, что не помогло. Если нужно — передам вопрос специалисту, напишите об этом."
+# Стабильные поля §3, которые имеет смысл помнить между сессиями (#3): осознанный выбор,
+# а не меняющиеся дата/площадь/описание. Деньги/ПДн сюда не попадают (G1/G3).
+_STABLE_PREF_KEYS = ("cleaning_type", "city", "movers_packing", "access")
+# Человекочитаемые метки обязательных полей §3 (для вопроса «что изменить?», #9).
+_FIELD_LABELS: dict[str, str] = {
+    "cleaning_type": "тип уборки",
+    "area_or_rooms": "площадь/комнаты",
+    "datetime": "дата и время",
+    "city": "город",
+    "volume": "объём",
+    "floors_elevators": "этаж и лифт",
+    "movers_packing": "грузчики/упаковка",
+    "subcategory": "вид работ",
+    "problem_description": "описание",
+    "access": "доступ",
+}
 
 
 @dataclass
@@ -82,6 +105,10 @@ class PostedTurn:
     turn: AgentTurn
     citations: list[dict[str, Any]] = field(default_factory=list)
     awaiting_confirmation: bool = False
+    # Структурная сводка предлагаемого действия (#7): {kind, category, fields, address}.
+    summary: dict[str, Any] | None = None
+    # Тапаемые варианты ответа (#10): [{id, label}]. Пусто, если вариантов нет.
+    options: list[dict[str, str]] = field(default_factory=list)
 
 
 def _action_kind(loop_result: LoopResult, outcome: AgentActionKind) -> str:
@@ -275,15 +302,33 @@ class SessionService:
                 correlation_id=correlation_id,
             )
 
+        # #4: запомнить ссылку на созданную заявку/обращение для будущих «что с моей
+        # заявкой?» (read-only get_status). Только непустые id/номера (G3, без ПДн).
+        if loop_result is not None and loop_result.created_refs:
+            fresh = {k: v for k, v in loop_result.created_refs.items() if v is not None}
+            if fresh:
+                session.last_refs = {**(session.last_refs or {}), **fresh}
+
         # Эскалация человеку (§7.3): решение политики → реальная передача в kb-support.
         # Снимок берётся ПОСЛЕ добавления user-реплики (autoflush в list_turns) — он
         # содержит текущий вопрос; коммит — общий с ходом (escalate_in_turn без commit).
         if loop_result is not None and loop_result.handoff:
-            await handoff_service.escalate_in_turn(
+            record = await handoff_service.escalate_in_turn(
                 session=session,
                 reason=loop_result.handoff_reason or AgentActionKind.HANDOFF.value,
                 correlation_id=correlation_id,
             )
+            # #6: честный ETA + номер обращения в реплике (после заведения тикета).
+            ref = record.target_ref
+            num = f" Обращение №{ref}." if ref else ""
+            reply = (
+                f"Передаю ваше обращение специалисту.{num} "
+                f"Он ответит {self._settings.handoff_eta_text}."
+            )
+
+        # #14: после оформления (action_taken) предлагаем оценить решение в этом же ответе.
+        if loop_result is not None and loop_result.action_taken:
+            reply = reply + _FEEDBACK_OFFER
 
         agent_turn = AgentTurn(
             session_id=session.id,
@@ -309,6 +354,8 @@ class SessionService:
             awaiting_confirmation=(
                 loop_result.awaiting_confirmation if loop_result is not None else False
             ),
+            summary=loop_result.summary if loop_result is not None else None,
+            options=loop_result.options if loop_result is not None else [],
         )
 
     async def _forward_to_operator(
@@ -458,6 +505,15 @@ class SessionService:
         `awaiting_confirmation`; запоминаем отложенное действие на сессии (только
         маскированный query, G3), действие НЕ исполняется до явного согласия.
         """
+        # #14: короткий ответ-оценка после действия («помогло»/«не помогло») — учитываем
+        # метрикой и благодарим, не запуская маршрутизацию. Длинный текст не перехватываем.
+        verdict = detect_feedback(masked)
+        if verdict is not None:
+            record_feedback(verdict)
+            record_action("answered")
+            user_turn.intent_trace = {"feedback": verdict}
+            return (_FEEDBACK_THANKS if verdict == "positive" else _FEEDBACK_SORRY), None
+
         outcome = await self._intent.classify(masked)
         if outcome is None:
             return _DEGRADED_REPLY, None
@@ -485,7 +541,7 @@ class SessionService:
             else ""
         )
         if decision.outcome is AgentActionKind.TOOL_CALL and category in ORDER_CATEGORIES:
-            answers = extract_fields(category, masked)
+            answers = await self._merge_prefs(session, category, extract_fields(category, masked))
             missing = missing_fields(category, answers)
             if missing:
                 return self._begin_order_flow(
@@ -498,6 +554,7 @@ class SessionService:
             query_masked=masked,
             context=tool_context,
             confirmed=False,
+            status_refs=session.last_refs,  # #4: статус по последней заявке сессии
         )
         trace["loop"] = loop_result.to_trace()
         user_turn.intent_trace = trace
@@ -521,13 +578,21 @@ class SessionService:
             self._emit_action_event(session, outcome.intent.value, kind, corr)
 
         if loop_result.awaiting_confirmation:
-            session.pending_action = {
+            pending: dict[str, Any] = {
                 "tools": list(decision.allowed_tools),
                 "intent": outcome.intent.value,
                 "query_masked": masked,  # маскированный (G3)
                 "policy_version": decision.policy_version,
                 "reason": decision.reason.value,
             }
+            # Контекст для правки до подтверждения (#9), если заявка с известной категорией.
+            if category in ORDER_CATEGORIES:
+                pending["order"] = {
+                    "category": category,
+                    "answers": extract_fields(category, masked),
+                    "original_masked": masked,
+                }
+            session.pending_action = pending
             record_confirmation("requested")
             extra_audits.append(
                 (
@@ -536,7 +601,49 @@ class SessionService:
                     decision.reason.value,
                 )
             )
+        # Сводка-квитанция предложения (#7) для заявки, собранной из одной реплики (#1/#2).
+        if outcome.intent is Intent.PARTNER_SERVICE:
+            await self._attach_order_summary(
+                loop_result,
+                category,
+                extract_fields(category, masked) if category in ORDER_CATEGORIES else {},
+                tool_context,
+                reasoning_loop,
+            )
         return loop_result.reply, loop_result
+
+    async def _merge_prefs(
+        self, session: AgentSession, category: str, answers: dict[str, str]
+    ) -> dict[str, str]:
+        """Подставить предпочтения пользователя «как обычно» (#3) в незаполненные стабильные
+        поля. Анонимная сессия → без изменений. Только стабильные ключи §3 (G1/G3)."""
+        if session.user_id is None:
+            return answers
+        prefs = await self._repo.get_user_prefs(session.user_id)
+        stored = (prefs or {}).get("fields", {})
+        if not isinstance(stored, dict):
+            return answers
+        keys = required_keys(category)
+        for key in _STABLE_PREF_KEYS:
+            if key in keys and not answers.get(key) and stored.get(key):
+                answers[key] = str(stored[key])
+        return answers
+
+    async def _save_prefs(
+        self, session: AgentSession, category: str, answers: dict[str, str]
+    ) -> None:
+        """Запомнить стабильные поля заявки в предпочтения пользователя (#3). Аноним → no-op."""
+        if session.user_id is None:
+            return
+        fields = {k: answers[k] for k in _STABLE_PREF_KEYS if answers.get(k)}
+        if not fields:
+            return
+        existing = await self._repo.get_user_prefs(session.user_id) or {}
+        existing_fields = existing.get("fields") if isinstance(existing.get("fields"), dict) else {}
+        merged = {**(existing_fields or {}), **fields}
+        await self._repo.upsert_user_prefs(
+            session.user_id, {"category": category, "fields": merged}
+        )
 
     def _begin_order_flow(
         self,
@@ -633,6 +740,7 @@ class SessionService:
             answers.setdefault(key, value)
         if isinstance(asking, str) and not answers.get(asking):
             answers[asking] = masked  # явный ответ на заданный вопрос (маскирован, G3)
+        answers = await self._merge_prefs(session, category, answers)  # «как обычно» (#3)
 
         missing = missing_fields(category, answers)
         trace: dict[str, Any] = {
@@ -681,6 +789,12 @@ class SessionService:
                 "query_masked": raw_input,  # маскированный полный текст (G3)
                 "policy_version": decision.policy_version,
                 "reason": decision.reason.value,
+                # Контекст для правки до подтверждения (#9): пересобрать flow_state.
+                "order": {
+                    "category": category,
+                    "answers": answers,
+                    "original_masked": original,
+                },
             }
             record_confirmation("requested")
             extra_audits.append(
@@ -690,7 +804,81 @@ class SessionService:
                     decision.reason.value,
                 )
             )
+        # Сводка-квитанция предложения (#7) + адрес из карточки (#1).
+        await self._attach_order_summary(
+            loop_result, category, answers, tool_context, reasoning_loop
+        )
         return loop_result.reply, loop_result
+
+    async def _attach_order_summary(
+        self,
+        loop_result: LoopResult,
+        category: str,
+        answers: dict[str, str],
+        tool_context: ToolContext,
+        reasoning_loop: ReasoningLoop,
+    ) -> None:
+        """Прикрепить к ходу структурную сводку заявки (#7) + адрес из карточки (#1).
+
+        Только для предложения партнёрской заявки (`awaiting_confirmation`) с известной
+        категорией: фронт рисует карточку «что оформляем». Адрес — read-only из
+        platform.get_context (деградация → без адреса, FR-6.6). Поля — маскированы (G3).
+        """
+        if not loop_result.awaiting_confirmation or category not in ORDER_CATEGORIES:
+            return
+        address = await reasoning_loop.fetch_address(tool_context)
+        summary: dict[str, Any] = {
+            "kind": "partner_request",
+            "category": category,
+            "fields": dict(answers),
+            "address": address,
+        }
+        # #12: диапазон цены/срока от kb-partners (авторитетно, G1). Нет оценки → без полей.
+        estimate = await reasoning_loop.fetch_estimate(
+            category, "; ".join(str(v) for v in answers.values()), tool_context
+        )
+        if estimate:
+            summary["price_range"] = estimate.get("price_range")
+            summary["eta"] = estimate.get("eta")
+        loop_result.summary = summary
+
+    def _reopen_for_edit(
+        self,
+        session: AgentSession,
+        order: dict[str, Any],
+        edit_field: str,
+        user_turn: AgentTurn,
+        extra_audits: list[tuple[str, str | None, str | None]],
+    ) -> tuple[str, LoopResult | None]:
+        """Вернуться к правке поля заявки до подтверждения (#9), сохранив прочие ответы.
+
+        Известное поле → очищаем его и переспрашиваем (остальные ответы сохранены),
+        сбор продолжится и заявка пере-предложится. Поле не распознано → спрашиваем, что
+        именно изменить (pending сохраняется). Действие НЕ исполняется (FR-7.4).
+        """
+        category = str(order.get("category", ""))
+        answers: dict[str, str] = dict(order.get("answers") or {})
+        original = str(order.get("original_masked", ""))
+        user_turn.intent = _PARTNER_SERVICE_VALUE
+        record_action("clarify")
+
+        if edit_field and edit_field in required_keys(category):
+            answers.pop(edit_field, None)  # переспросим именно его
+            session.flow_state = {
+                "category": category,
+                "answers": answers,
+                "asking": edit_field,
+                "original_masked": original,
+            }
+            session.pending_action = None  # вышли из гейта подтверждения в сбор
+            user_turn.intent_trace = {"edit": {"field": edit_field}}
+            extra_audits.append((AuditAction.ORDER_FIELD_REQUESTED.value, category, edit_field))
+            return prompt_for(category, edit_field) or _FIELD_FALLBACK_REPLY, None
+
+        # Не поняли, что менять → спрашиваем (pending сохраняется, действие не исполняется).
+        user_turn.intent_trace = {"edit": {"field": None}}
+        labels = ", ".join(_FIELD_LABELS.get(k, k) for k in required_keys(category))
+        return f"Что изменить? Можно поправить: {labels}.", None
 
     async def _resolve_pending(
         self,
@@ -704,6 +892,13 @@ class SessionService:
         """Разрешить ожидающее подтверждение (FR-7.4): согласие → исполнить, отказ →
         отменить, неясно → переспросить (детерминированно, не LLM; G6)."""
         pending: dict[str, Any] = session.pending_action or {}
+        # Правка собранной заявки до подтверждения (#9): вернуться к нужному полю, не
+        # отменяя весь сбор. Проверяем ДО согласия (приоритет «исправить» над «да»).
+        order = pending.get("order")
+        if isinstance(order, dict):
+            edit_field = detect_edit(masked)
+            if edit_field is not None:
+                return self._reopen_for_edit(session, order, edit_field, user_turn, extra_audits)
         verdict = detect_confirmation(masked)
         record_confirmation(verdict.value.lower())  # yes/no/unclear (§7.4, M8)
         trace: dict[str, Any] = {
@@ -730,6 +925,12 @@ class SessionService:
             session.flow_state = None  # заявка оформлена → сбор полей завершён
             kind = "action_taken" if loop_result.action_taken else "degraded"
             record_action(kind)
+            # #3: запомнить стабильные поля оформленной заявки в предпочтения пользователя.
+            order = pending.get("order")
+            if loop_result.action_taken and isinstance(order, dict):
+                await self._save_prefs(
+                    session, str(order.get("category", "")), dict(order.get("answers") or {})
+                )
             if self._settings.webhook_subscriber_url:
                 self._emit_action_event(
                     session, str(pending.get("intent")), kind, tool_context.correlation_id
@@ -757,6 +958,8 @@ class SessionService:
         session.status = SessionStatus.FORGOTTEN
         session.forgotten_at = self._repo.now()
         session.summary = None  # сжатая память диалога — удаляется
+        if session.user_id is not None:
+            await self._repo.delete_user_prefs(session.user_id)  # #3: предпочтения — тоже
         self._repo.add_audit(
             session_id=session.id,
             actor_id=_audit_actor(principal),

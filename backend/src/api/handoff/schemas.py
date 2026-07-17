@@ -51,3 +51,18 @@ class OperatorReplyIn(BaseModel):
     session_id: uuid.UUID
     message: str = Field(min_length=1, max_length=8000)
     ticket_ref: str | None = Field(default=None, max_length=255)
+
+
+class StatusUpdateIn(BaseModel):
+    """Тело `POST /inbound/status-update` (SERVICE-only, #5): проактивное уведомление.
+
+    Сосед (kb-partners/kb-support) на смену статуса заявки шлёт человекочитаемый `text`
+    (+ опц. `ref`/`status` для контекста); Консьерж добавляет его системной репликой в
+    диалог. Маскируется на сервере (G3)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: uuid.UUID
+    text: str = Field(min_length=1, max_length=4000)
+    ref: str | None = Field(default=None, max_length=255)
+    status: str | None = Field(default=None, max_length=64)

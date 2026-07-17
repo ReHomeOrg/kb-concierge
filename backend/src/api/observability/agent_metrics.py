@@ -45,6 +45,11 @@ AGENT_ORDER_MISSING_FIELDS = Counter(
     "Запрошенные обязательные поля заявки (R1/§3)",
     ["category", "field"],
 )
+AGENT_FEEDBACK = Counter(
+    "agent_feedback_total",
+    "Оценка пользователем решения после действия (#14)",
+    ["verdict"],
+)
 
 
 def record_intent(intent: str, method: str) -> None:
@@ -77,3 +82,8 @@ def record_order_step(category: str, action: str) -> None:
 def record_order_missing_field(category: str, field: str) -> None:
     """Запрос обязательного поля заявки (R1). Лейбл `field` — ключ из §3, не значение."""
     AGENT_ORDER_MISSING_FIELDS.labels(category=category, field=field).inc()
+
+
+def record_feedback(verdict: str) -> None:
+    """`verdict` ∈ positive/negative (#14)."""
+    AGENT_FEEDBACK.labels(verdict=verdict).inc()

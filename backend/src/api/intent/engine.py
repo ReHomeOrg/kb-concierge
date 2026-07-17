@@ -35,6 +35,48 @@ _PARTNER_CATEGORY: dict[str, tuple[str, ...]] = {
     "KEY_DELIVERY": ("ключ", "доставка ключ", "передать ключ"),
 }
 
+# Плоский список ключей партнёрских услуг (используется и для intent-правил, и для
+# моста «инфо→действие» #11 в ходе — без дублирования).
+PARTNER_SERVICE_KEYWORDS: tuple[str, ...] = tuple(
+    kw for kws in _PARTNER_CATEGORY.values() for kw in kws
+)
+
+# Фразы-триггеры «что умею / меню» (discovery, #15). Маршрутизируются как SMALL_TALK
+# (низкорисковый прямой ответ), а ход отдаёт меню-сценариев вместо приветствия.
+CAPABILITIES_KEYWORDS: tuple[str, ...] = (
+    "что умеешь",
+    "что ты умеешь",
+    "что ты можешь",
+    "что можешь",
+    "чем поможешь",
+    "чем можешь помочь",
+    "чем ты поможешь",
+    "какие возможности",
+    "меню",
+)
+
+# Фразы-триггеры вопроса о статусе своей заявки/обращения (STATUS_QUERY, read-only #4).
+# Многословные стеммы — чтобы не путать с созданием заявки (PARTNER_SERVICE).
+_STATUS_KEYWORDS: tuple[str, ...] = (
+    "статус заявк",
+    "статус заказ",
+    "статус обращени",
+    "что с заявк",
+    "что с моей заявк",
+    "что с заказ",
+    "что с обращени",
+    "что по заявк",
+    "что по заказ",
+    "где моя заявк",
+    "где мой заказ",
+    "где заявк",
+    "готова ли заявк",
+    "готов ли заказ",
+    "как там заявк",
+    "как там моя заявк",
+    "как там заказ",
+)
+
 # Ключевые слова (стеммы, lower-case) по классам намерения (FR-5.1).
 _KEYWORDS: dict[Intent, tuple[str, ...]] = {
     Intent.INFO_QA: (
@@ -57,7 +99,8 @@ _KEYWORDS: dict[Intent, tuple[str, ...]] = {
         "режим работы",
         "сколько действ",
     ),
-    Intent.PARTNER_SERVICE: tuple(kw for kws in _PARTNER_CATEGORY.values() for kw in kws),
+    Intent.PARTNER_SERVICE: PARTNER_SERVICE_KEYWORDS,
+    Intent.STATUS_QUERY: _STATUS_KEYWORDS,
     Intent.SUPPORT_ISSUE: (
         "жалоб",
         "пожаловат",
@@ -87,6 +130,7 @@ _KEYWORDS: dict[Intent, tuple[str, ...]] = {
         "спасибо",
         "благодар",
         "до свидан",
+        *CAPABILITIES_KEYWORDS,  # «что умеешь / меню» — низкорисковый прямой ответ (#15)
     ),
 }
 

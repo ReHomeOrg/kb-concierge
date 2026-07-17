@@ -61,6 +61,7 @@ class AuditAction(str, enum.Enum):
     AGENT_RESPONDED = "AGENT_RESPONDED"
     HANDOFF_CREATED = "HANDOFF_CREATED"  # §7.3: эскалация человеку в kb-support (M6, FR-7.1)
     OPERATOR_REPLIED = "OPERATOR_REPLIED"  # §7.3: ответ оператора возвращён в диалог (M6, FR-7.2)
+    STATUS_PUSHED = "STATUS_PUSHED"  # #5: проактивное уведомление о статусе заявки в диалог
     SESSION_FORGOTTEN = "SESSION_FORGOTTEN"
 
 

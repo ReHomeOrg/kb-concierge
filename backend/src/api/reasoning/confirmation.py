@@ -73,3 +73,62 @@ def _token_match(text: str, needle: str) -> bool:
     if len(needle) <= 2:
         return re.search(rf"(?<!\w){re.escape(needle)}(?!\w)", text) is not None
     return needle in text
+
+
+# Триггеры запроса правки собранной заявки до подтверждения (#9).
+_EDIT_TRIGGERS = (
+    "измен",
+    "помен",
+    "поправ",
+    "исправ",
+    "передел",
+    "перенес",
+    "перенос",
+    "редактир",
+    "не так",
+)
+# Слово-поле → ключ обязательного поля §3 (для адресной правки). Стеммы lower-case.
+_EDIT_FIELDS: tuple[tuple[str, str], ...] = (
+    ("дат", "datetime"),
+    ("время", "datetime"),
+    ("час", "datetime"),
+    ("когда", "datetime"),
+    ("перенес", "datetime"),
+    ("перенос", "datetime"),
+    ("площад", "area_or_rooms"),
+    ("метр", "area_or_rooms"),
+    ("комнат", "area_or_rooms"),
+    ("размер", "area_or_rooms"),
+    ("тип уборки", "cleaning_type"),
+    ("генеральн", "cleaning_type"),
+    ("поддержив", "cleaning_type"),
+    ("город", "city"),
+    ("объём", "volume"),
+    ("объем", "volume"),
+    ("грузчик", "movers_packing"),
+    ("упаков", "movers_packing"),
+    ("этаж", "floors_elevators"),
+    ("лифт", "floors_elevators"),
+    ("электрик", "subcategory"),
+    ("сантехник", "subcategory"),
+    ("доступ", "access"),
+)
+
+
+def detect_edit(masked_text: str) -> str | None:
+    """Распознать запрос правки заявки до подтверждения (#9, детерминированно).
+
+    Возвращает: ключ обязательного поля (адресная правка «измени дату»), пустую строку
+    (правка без явного поля → спросить что именно) или None (не правка). Короткую реплику
+    из одного-трёх слов трактуем как имя поля (ответ на «что изменить?»), длинную — только
+    при явном триггере правки.
+    """
+    text = masked_text.lower().strip()
+    is_edit = any(t in text for t in _EDIT_TRIGGERS)
+    is_short = len(text.split()) <= 3
+    if not is_edit and not is_short:
+        return None
+    for stem, key in _EDIT_FIELDS:
+        if stem in text:
+            return key
+    return "" if is_edit else None

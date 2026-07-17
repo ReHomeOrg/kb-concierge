@@ -98,6 +98,11 @@ class AgentSession(Base, TimestampMixin):
     low_confidence_streak: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
+    # Ссылки на последние созданные сущности соседей в этой сессии (#4): {partner_request_id,
+    # partner_number, support_ticket_id, support_number}. Нужны, чтобы отвечать на «что с
+    # моей заявкой?» (read-only get_status). Только идентификаторы/номера, без ПДн (G3).
+    # NULL → в сессии ещё ничего не оформлено.
+    last_refs: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     # Сквозной correlation_id создающего запроса (NFR-13 трассировка).
     correlation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -159,6 +164,21 @@ class AgentTurn(Base):
             postgresql_where=text("idempotency_key IS NOT NULL"),
         ),
     )
+
+
+class UserPreference(Base, TimestampMixin):
+    """Предпочтения пользователя между сессиями (#3): «как обычно».
+
+    Своя БД (арх-константа): ключ — `user_id` (sub из JWT, строковая ссылка, не FK).
+    `prefs` JSONB: {category, fields:{<стабильный ключ §3>: значение}} — ТОЛЬКО
+    маскированные/неденежные значения (G3/G1), диалоговая память, не доменное состояние.
+    Анонимные сессии предпочтений не имеют. Чистится при праве на забвение.
+    """
+
+    __tablename__ = "user_preferences"
+
+    user_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    prefs: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 
 
 class AuditLog(Base):

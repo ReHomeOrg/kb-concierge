@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from api.intent.engine import CAPABILITIES_KEYWORDS, PARTNER_SERVICE_KEYWORDS
 from api.intent.enums import Intent
 from api.policy.engine import PolicyDecision
 from api.policy.enums import AgentActionKind
@@ -21,7 +22,14 @@ from api.tools.base import ToolContext
 from api.tools.registry import ToolRegistry
 
 _HANDOFF_REPLY = "Передаю ваше обращение специалисту — он скоро подключится."
-_CLARIFY_REPLY = "Уточните, пожалуйста, детали запроса, чтобы я направил его верно."
+_CLARIFY_REPLY = "Уточните, пожалуйста, запрос — или выберите, что нужно:"
+# Умный CLARIFY (#10): вместо тупика — тапаемые варианты основных сценариев.
+_CLARIFY_OPTIONS: list[dict[str, str]] = [
+    {"id": "info", "label": "Задать вопрос по базе знаний"},
+    {"id": "order", "label": "Оформить заявку (уборка/переезд/ремонт)"},
+    {"id": "status", "label": "Узнать статус заявки"},
+    {"id": "operator", "label": "Связаться со специалистом"},
+]
 _CONFIRM_REPLY = "Подготовил заявку. Подтвердите — и я передам её в работу."
 _PENDING_REPLY = "Принял, передаю запрос в обработку."
 _SMALL_TALK_REPLY = "Рад помочь! Чем могу быть полезен?"
@@ -33,11 +41,35 @@ _NO_ANSWER_REPLY = (
 
 _KB_SEARCH = "kb.search"
 _KB_ANSWER = "kb.answer"
+_PLATFORM_GET_CONTEXT = "platform.get_context"
 _PARTNERS_CREATE = "partners.create_request"
 _PARTNERS_CLASSIFY = "partners.classify"
 _PARTNERS_DISPATCH = "partners.dispatch"
+_PARTNERS_GET_STATUS = "partners.get_status"
+_PARTNERS_ESTIMATE = "partners.estimate"
 _SUPPORT_CREATE = "support.create_ticket"
 _SUPPORT_ADD_MESSAGE = "support.add_message"
+_SUPPORT_GET_STATUS = "support.get_status"
+
+# Мост «инфо→действие» (#11): предложить оформить заявку после ответа из базы знаний.
+_INFO_ACTION_OFFER = " Если нужно — могу оформить заявку на услугу."
+_INFO_ACTION_OPTION = {"id": "order", "label": "Оформить заявку"}
+
+# Discovery (#15): меню сценариев в ответ на «что умеешь / меню».
+_CAPABILITIES_REPLY = (
+    "Я помогу: найду ответ в базе знаний, оформлю заявку партнёру "
+    "(уборка, переезд, ремонт), подскажу статус вашей заявки и при необходимости "
+    "передам вопрос специалисту. С чего начнём?"
+)
+# Статус заявки (#4): нет ссылки на заявку в сессии / статус недоступен.
+_STATUS_NO_REF_REPLY = (
+    "Не вижу вашей заявки в этом диалоге. Оформите заявку — и я смогу показать её статус, "
+    "либо передам вопрос специалисту."
+)
+_STATUS_UNAVAILABLE_REPLY = (
+    "Не получилось узнать статус прямо сейчас — сервис временно недоступен. "
+    "Попробуйте чуть позже или я передам вопрос специалисту."
+)
 
 # FR-7.4: предложение платного/необратимого действия + запрос явного согласия.
 _PROPOSE_PARTNER_REPLY = (
@@ -86,6 +118,17 @@ class LoopResult:
     # Транзитные: отдаются в ответе хода, в БД не персистятся (текстовые источники
     # остаются в content). Пусто для не-INFO_QA ходов.
     citations: list[dict[str, Any]] = field(default_factory=list)
+    # Ссылки на созданные сущности соседей (#4): {partner_request_id, partner_number,
+    # support_ticket_id, support_number}. Сервис кладёт их в `session.last_refs`, чтобы
+    # потом отвечать на «что с моей заявкой?» (read-only get_status). Без ПДн (G3).
+    created_refs: dict[str, Any] = field(default_factory=dict)
+    # Структурная сводка предлагаемого действия для карточки в UI (#7): {kind, category,
+    # fields, address}. Транзитная — отдаётся в ответе хода, в БД не персистится. None,
+    # если сводки нет (не предложение заявки).
+    summary: dict[str, Any] | None = None
+    # Тапаемые варианты ответа для UI (#10): [{id, label}]. Транзитные. Пусто, если
+    # вариантов нет (обычный ответ). Заполняются для умного CLARIFY.
+    options: list[dict[str, str]] = field(default_factory=list)
 
     def to_trace(self) -> dict[str, Any]:
         return {
@@ -117,6 +160,7 @@ class ReasoningLoop:
         query_masked: str,
         context: ToolContext,
         confirmed: bool = False,
+        status_refs: dict[str, Any] | None = None,
     ) -> LoopResult:
         if decision.outcome is AgentActionKind.HANDOFF:
             # Сигнал эскалации (§7.3): фактическую передачу исполнит HandoffService.
@@ -124,10 +168,14 @@ class ReasoningLoop:
                 reply=_HANDOFF_REPLY, handoff=True, handoff_reason=decision.reason.value
             )
         if decision.outcome is AgentActionKind.CLARIFY:
-            return LoopResult(reply=_CLARIFY_REPLY)
+            # Умный CLARIFY (#10): уточнение + тапаемые варианты сценариев, не тупик.
+            return LoopResult(reply=_CLARIFY_REPLY, options=list(_CLARIFY_OPTIONS))
         if decision.outcome is AgentActionKind.TOOL_CALL:
             return await self._handle_tool_call(decision, intent, query_masked, context, confirmed)
         # ANSWER
+        if intent is Intent.STATUS_QUERY:
+            # Read-only статус последней заявки сессии (#4); ссылки даёт сервис.
+            return await self._run_status_query(decision, context, status_refs or {})
         if intent is Intent.INFO_QA and _KB_SEARCH in decision.allowed_tools:
             # K-4 #15: RAG-синтез (kb.answer) при включении и наличии инструмента;
             # иначе — детерминированные цитаты kb.search (поведение M5).
@@ -135,10 +183,117 @@ class ReasoningLoop:
                 return await self._answer_from_kb_rag(query_masked, context)
             return await self._answer_from_kb(query_masked, context)
         if intent is Intent.SMALL_TALK:
+            # Discovery (#15): «что умеешь / меню» → меню сценариев, иначе приветствие.
+            if _is_capabilities_query(query_masked):
+                return LoopResult(reply=_CAPABILITIES_REPLY)
             return LoopResult(reply=_SMALL_TALK_REPLY)
         if intent is Intent.OUT_OF_SCOPE:
             return LoopResult(reply=_OUT_OF_SCOPE_REPLY)
         return LoopResult(reply=_DEFAULT_REPLY)
+
+    async def fetch_address(self, context: ToolContext) -> str | None:
+        """Адрес ЕДИНСТВЕННОГО объекта пользователя из карточки (#1, read-only).
+
+        Для предзаполнения сводки заявки (не спрашивать известное). Деградация (нет
+        инструмента/делегирования/несколько или ноль объектов/недоступность) → None
+        (FR-6.6): сводка просто без адреса. Без ПДн пользователя (только адрес объекта).
+        """
+        if context.on_behalf_of is None or self._registry.get(_PLATFORM_GET_CONTEXT) is None:
+            return None
+        try:
+            result = await self._registry.call(_PLATFORM_GET_CONTEXT, {}, context)
+        except Exception:
+            return None
+        if result.unavailable:
+            return None
+        premises = result.data.get("premises") or []
+        if len(premises) == 1 and isinstance(premises[0], dict):
+            address = premises[0].get("address")
+            return str(address) if address else None
+        return None
+
+    async def fetch_estimate(
+        self, category: str, query_masked: str, context: ToolContext
+    ) -> dict[str, str] | None:
+        """Диапазон цены/срока услуги от kb-partners (#12) для сводки заявки.
+
+        Числа — АВТОРИТЕТНО от модуля (G1, не от LLM). Инструмент `partners.estimate`
+        config-gated: пока не подключён (нет эндпоинта у соседа) → None, сводка без оценки
+        (деградация FR-6.6). Возвращает {price_range?, eta?}.
+        """
+        if self._registry.get(_PARTNERS_ESTIMATE) is None:
+            return None
+        try:
+            result = await self._registry.call(
+                _PARTNERS_ESTIMATE, {"category": category, "query": query_masked}, context
+            )
+        except Exception:
+            return None
+        if result.unavailable:
+            return None
+        out: dict[str, str] = {}
+        if result.data.get("price_range"):
+            out["price_range"] = str(result.data["price_range"])
+        if result.data.get("eta"):
+            out["eta"] = str(result.data["eta"])
+        return out or None
+
+    async def _run_status_query(
+        self, decision: PolicyDecision, context: ToolContext, refs: dict[str, Any]
+    ) -> LoopResult:
+        """Статус последней заявки/обращения сессии (#4, read-only).
+
+        Берём ссылку из `refs` (сервис передаёт `session.last_refs`): сначала
+        партнёрская заявка, затем обращение поддержки. Поиск по человеко-номеру не
+        делаем — у соседей нет lookup-эндпоинта по номеру (только по id). Нет ссылки →
+        просим оформить заявку; инструмент недоступен → деградация (FR-6.6, G6).
+        """
+        partner_id = refs.get("partner_request_id")
+        if (
+            partner_id
+            and _PARTNERS_GET_STATUS in decision.allowed_tools
+            and self._registry.get(_PARTNERS_GET_STATUS) is not None
+        ):
+            data, obs = await self._call_tool(
+                _PARTNERS_GET_STATUS, {"request_id": str(partner_id)}, context
+            )
+            if not obs.unavailable and data.get("status"):
+                return LoopResult(
+                    reply=_status_reply(data, "Заявка"), observations=[obs], tool_calls=1, steps=2
+                )
+            return LoopResult(
+                reply=_STATUS_UNAVAILABLE_REPLY,
+                observations=[obs],
+                tool_calls=1,
+                steps=2,
+                degraded=True,
+            )
+
+        support_id = refs.get("support_ticket_id")
+        if (
+            support_id
+            and _SUPPORT_GET_STATUS in decision.allowed_tools
+            and self._registry.get(_SUPPORT_GET_STATUS) is not None
+        ):
+            data, obs = await self._call_tool(
+                _SUPPORT_GET_STATUS, {"ticket_id": str(support_id)}, context
+            )
+            if not obs.unavailable and data.get("status"):
+                return LoopResult(
+                    reply=_status_reply(data, "Обращение"),
+                    observations=[obs],
+                    tool_calls=1,
+                    steps=2,
+                )
+            return LoopResult(
+                reply=_STATUS_UNAVAILABLE_REPLY,
+                observations=[obs],
+                tool_calls=1,
+                steps=2,
+                degraded=True,
+            )
+
+        return LoopResult(reply=_STATUS_NO_REF_REPLY)
 
     async def _handle_tool_call(
         self,
@@ -242,6 +397,8 @@ class ReasoningLoop:
             tool_calls=len(observations),
             steps=len(observations) + 1,
             action_taken=True,
+            # Ссылка на заявку для последующих «что с моей заявкой?» (#4).
+            created_refs={"partner_request_id": request_id, "partner_number": data.get("number")},
         )
 
     async def _run_support_issue(
@@ -265,6 +422,11 @@ class ReasoningLoop:
             tool_calls=1,
             steps=2,
             action_taken=True,
+            # Ссылка на обращение для последующих «что с моим обращением?» (#4).
+            created_refs={
+                "support_ticket_id": data.get("ticket_id"),
+                "support_number": data.get("number"),
+            },
         )
 
     async def _answer_from_kb(self, query_masked: str, context: ToolContext) -> LoopResult:
@@ -288,12 +450,14 @@ class ReasoningLoop:
             return LoopResult(
                 reply=_NO_ANSWER_REPLY, observations=[obs], tool_calls=1, steps=2, degraded=True
             )
+        reply, options = _with_info_offer(_build_answer(result.data, citations), query_masked)
         return LoopResult(
-            reply=_build_answer(result.data, citations),
+            reply=reply,
             observations=[obs],
             tool_calls=1,
             steps=2,
             citations=citations,
+            options=options,
         )
 
     async def _answer_from_kb_rag(self, query_masked: str, context: ToolContext) -> LoopResult:
@@ -316,13 +480,40 @@ class ReasoningLoop:
             return LoopResult(
                 reply=_NO_ANSWER_REPLY, observations=[obs], tool_calls=1, steps=2, degraded=True
             )
+        reply, options = _with_info_offer(_build_answer(result.data, citations), query_masked)
         return LoopResult(
-            reply=_build_answer(result.data, citations),
+            reply=reply,
             observations=[obs],
             tool_calls=1,
             steps=2,
             citations=citations,
+            options=options,
         )
+
+
+def _with_info_offer(reply: str, query_masked: str) -> tuple[str, list[dict[str, str]]]:
+    """Мост «инфо→действие» (#11): вопрос про услугу → предложить оформить заявку.
+
+    Детерминированно (ключи партнёрских услуг); иначе — ответ без оффера.
+    """
+    text = query_masked.lower()
+    if any(kw in text for kw in PARTNER_SERVICE_KEYWORDS):
+        return reply + _INFO_ACTION_OFFER, [dict(_INFO_ACTION_OPTION)]
+    return reply, []
+
+
+def _is_capabilities_query(query_masked: str) -> bool:
+    """Реплика — вопрос о возможностях («что умеешь / меню», #15)."""
+    text = query_masked.lower()
+    return any(kw in text for kw in CAPABILITIES_KEYWORDS)
+
+
+def _status_reply(data: dict[str, Any], kind: str) -> str:
+    """Человекочитаемый ответ о статусе (отражаем данные модуля, FR-6.5; G3)."""
+    number = data.get("number")
+    head = f"{kind} №{number}" if number else kind
+    status = data.get("status")
+    return f"{head}: статус «{status}»." if status else f"{head} в работе."
 
 
 def _build_answer(data: dict[str, Any], citations: list[dict[str, Any]]) -> str:

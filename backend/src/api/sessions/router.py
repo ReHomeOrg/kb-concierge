@@ -26,6 +26,8 @@ from api.sessions.ratelimit import RateLimiter
 from api.sessions.schemas import (
     CitationOut,
     MessageCreate,
+    OptionOut,
+    ProposedActionOut,
     SessionCreate,
     SessionRead,
     TurnRead,
@@ -98,6 +100,20 @@ async def post_message_endpoint(
         if c.get("title")
     ]
     turn.awaiting_confirmation = posted.awaiting_confirmation
+    if posted.summary is not None:
+        turn.summary = ProposedActionOut(
+            kind=str(posted.summary.get("kind", "")),
+            category=posted.summary.get("category"),
+            fields={str(k): str(v) for k, v in (posted.summary.get("fields") or {}).items()},
+            address=posted.summary.get("address"),
+            price_range=posted.summary.get("price_range"),
+            eta=posted.summary.get("eta"),
+        )
+    turn.options = [
+        OptionOut(id=str(o.get("id", "")), label=str(o.get("label", "")))
+        for o in posted.options
+        if o.get("label")
+    ]
     return turn
 
 
