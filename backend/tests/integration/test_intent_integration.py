@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.principal import Principal, PrincipalKind
-from api.sessions.enums import AuditAction, TurnRole
+from api.sessions.enums import AuditAction, SessionStatus, TurnRole
 from api.sessions.models import AgentSession, AgentTurn, AuditLog
 
 pytestmark = pytest.mark.asyncio
@@ -76,6 +76,31 @@ async def test_ambiguous_below_threshold_asks_clarify(
         f"{_MSGS}/{sess.id}/messages", json={"content": "как продлить уборку"}
     )
     assert "уточн" in resp.json()["content"].lower()
+
+
+async def test_repeat_low_confidence_escalates_to_handoff(
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
+    session: AsyncSession,
+) -> None:
+    # ERR-30: первое low-confidence → уточнение; ПОВТОР низкой уверенности → handoff
+    # (доктрина «≤1 уточняющий вопрос, затем человек»).
+    principal = make_principal(PrincipalKind.USER)
+    sess = await seed_session(user_id=str(principal.user_id))
+    client = make_client(principal)
+    ambiguous = {"content": "как продлить уборку"}  # NullLLM → conf 0.4 < порога
+
+    r1 = await client.post(f"{_MSGS}/{sess.id}/messages", json=ambiguous)
+    assert "уточн" in r1.json()["content"].lower()  # 1-й — уточнение
+
+    r2 = await client.post(f"{_MSGS}/{sess.id}/messages", json=ambiguous)
+    assert "специалист" in r2.json()["content"].lower()  # 2-й подряд → handoff
+
+    refreshed = await session.get(AgentSession, sess.id)
+    assert refreshed is not None
+    assert refreshed.status is SessionStatus.HANDED_OFF
+    assert refreshed.low_confidence_streak == 0  # сброшен после эскалации
 
 
 async def test_intent_classified_audit_written(

@@ -55,11 +55,17 @@ class HandoffService:
         self._emit_events = emit_events  # публиковать webhook agent.handoff_created (§10)
 
     async def force_handoff(
-        self, principal: Principal, session_id: uuid.UUID, correlation_id: str | None
+        self,
+        principal: Principal,
+        session_id: uuid.UUID,
+        correlation_id: str | None,
+        external_context: str | None = None,
     ) -> HandoffRecord:
         """Принудительная эскалация (`POST /sessions/{id}/handoff`). Коммитит сам.
 
         Видимость считается ДО действия: невидимая сессия → 404 (анти-enumeration).
+        `external_context` — транскрипт диалога-источника (чат «Помощь»): в снимок
+        тикета, маскируется (G3).
         """
         session = await self._sessions.get_for_update(session_id)
         if session is None or not can_access(principal, session):
@@ -80,6 +86,7 @@ class HandoffService:
             reason=reason,
             actor_id=actor_id,
             correlation_id=correlation_id,
+            external_context=external_context,
         )
         await self._handoffs.flush_refresh(record)
         await self._sessions.commit()
@@ -93,6 +100,7 @@ class HandoffService:
         message: str,
         ticket_ref: str | None,
         correlation_id: str | None,
+        idempotency_key: str | None = None,
     ) -> AgentTurn:
         """Вернуть ВНЕШНИЙ ответ оператора в диалог (FR-7.2). Коммитит сам.
 
@@ -100,6 +108,9 @@ class HandoffService:
         заметки оператора сюда не передаются (инвариант «внутреннее ≠ внешнее», FR-7.3):
         контур приёма SERVICE-only, схема запрещает посторонние поля. Без активной
         эскалации → 404 (misrouted reply). ПДн в `content_masked` маскируются (G3).
+
+        `idempotency_key` (заголовок `Idempotency-Key` от источника) — повторный вебхук
+        с тем же ключом возвращает уже добавленную реплику без дубля (ERR-18).
         """
         session = await self._sessions.get_for_update(session_id)
         if session is None:
@@ -108,12 +119,18 @@ class HandoffService:
         if handoff is None:
             raise ProblemException.not_found(detail="No active handoff for session")
 
+        if idempotency_key is not None:
+            existing = await self._sessions.turn_by_idempotency_key(session.id, idempotency_key)
+            if existing is not None:
+                return existing  # идемпотентный no-op: реплика уже принята
+
         turn = AgentTurn(
             session_id=session.id,
             role=TurnRole.OPERATOR,
             content=message,
             content_masked=mask_pii(message),
             correlation_id=correlation_id,
+            idempotency_key=idempotency_key,
         )
         self._sessions.add_turn(turn)
         self._sessions.add_audit(
@@ -126,6 +143,14 @@ class HandoffService:
         await self._sessions.flush_refresh(turn)
         await self._sessions.commit()
         return turn
+
+    async def active_ticket_ref(self, session_id: uuid.UUID) -> str | None:
+        """Тикет активной эскалации сессии (для пересылки реплик пользователя в тикет).
+
+        None — нет открытой эскалации либо она PENDING (kb-support был недоступен, тикета нет).
+        """
+        handoff = await self._handoffs.latest_open_for_session(session_id)
+        return handoff.target_ref if handoff is not None else None
 
     async def escalate_in_turn(
         self, *, session: AgentSession, reason: str, correlation_id: str | None
@@ -150,9 +175,15 @@ class HandoffService:
         reason: str,
         actor_id: uuid.UUID,
         correlation_id: str | None,
+        external_context: str | None = None,
     ) -> HandoffRecord:
         turns = await self._sessions.list_turns(session.id)
         snapshot = build_context_snapshot(turns)  # маскированный (G3)
+        if external_context:
+            # Транскрипт диалога-источника (чат «Помощь») — в снимок тикета,
+            # маскированный (G3). Для пустой сессии Консьержа становится осн. контекстом.
+            masked = mask_pii(external_context)
+            snapshot = masked if not turns else f"{masked}\n\n{snapshot}"
         ref = snapshot_ref(session.id, len(turns))
 
         ticket_id, unavailable = await self._open_ticket(

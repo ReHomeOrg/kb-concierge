@@ -35,7 +35,9 @@ _KB_SEARCH = "kb.search"
 _KB_ANSWER = "kb.answer"
 _PARTNERS_CREATE = "partners.create_request"
 _PARTNERS_CLASSIFY = "partners.classify"
+_PARTNERS_DISPATCH = "partners.dispatch"
 _SUPPORT_CREATE = "support.create_ticket"
+_SUPPORT_ADD_MESSAGE = "support.add_message"
 
 # FR-7.4: предложение платного/необратимого действия + запрос явного согласия.
 _PROPOSE_PARTNER_REPLY = (
@@ -165,6 +167,25 @@ class ReasoningLoop:
             return await self._run_support_issue(decision, query_masked, context)
         return LoopResult(reply=_PENDING_REPLY)
 
+    async def forward_to_ticket(
+        self, ticket_id: str, body_masked: str, context: ToolContext
+    ) -> bool:
+        """Переслать ВНЕШНЕЕ сообщение пользователя в тикет (support.add_message) после эскалации.
+
+        Инструмент не подключён (config-gated) / сосед недоступен / сбой → False (деградация
+        FR-6.6, реплику не теряем — её сохраняет сервис). `body_masked` уже маскирован (G3),
+        делегирование прав пользователя — через `context` (G7). is_internal=False на адаптере.
+        """
+        if self._registry.get(_SUPPORT_ADD_MESSAGE) is None:
+            return False
+        try:
+            result = await self._registry.call(
+                _SUPPORT_ADD_MESSAGE, {"ticket_id": ticket_id, "body": body_masked}, context
+            )
+        except Exception:
+            return False
+        return not result.unavailable
+
     async def _call_tool(
         self, name: str, payload: dict[str, Any], context: ToolContext
     ) -> tuple[dict[str, Any], Observation]:
@@ -202,6 +223,19 @@ class ReasoningLoop:
             observations.append(obs_class)
             if not obs_class.unavailable and class_data:
                 data = class_data
+        # Диспетч партнёру (R3) — после согласия (FR-7.4), только если инструмент
+        # подключён (config-gated) и есть бюджет; недоступность → деградация (FR-6.6).
+        if (
+            _PARTNERS_DISPATCH in decision.allowed_tools
+            and self._registry.get(_PARTNERS_DISPATCH) is not None
+            and self._limits.max_tool_calls >= len(observations) + 1
+        ):
+            disp_data, obs_disp = await self._call_tool(
+                _PARTNERS_DISPATCH, {"request_id": request_id}, context
+            )
+            observations.append(obs_disp)
+            if not obs_disp.unavailable and disp_data:
+                data = disp_data
         return LoopResult(
             reply=_partner_reply(data),
             observations=observations,

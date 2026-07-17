@@ -29,7 +29,11 @@ class HttpKbPartnersClient:
         self._token = token_provider
 
     async def _headers(
-        self, *, on_behalf_of: str | None, correlation_id: str | None
+        self,
+        *,
+        on_behalf_of: str | None,
+        correlation_id: str | None,
+        idempotency_key: str | None = None,
     ) -> dict[str, str]:
         # Делегирование прав — в самом токене (token-exchange), НЕ заголовком
         # X-On-Behalf-Of (kb-partners читает on-behalf-of из claim'а; CC-1/ADR-0004).
@@ -38,6 +42,10 @@ class HttpKbPartnersClient:
         }
         if correlation_id is not None:
             headers["X-Correlation-Id"] = correlation_id  # сквозная трасса (NFR-13)
+        if idempotency_key is not None:
+            # Стабильный ключ операции — повтор хода/ретрай не плодит заказ у соседа
+            # (ERR-16; в дополнение к дедупу kb-partners по chat_session_id, FR-6.4).
+            headers["Idempotency-Key"] = idempotency_key
         return headers
 
     async def create_from_chat(
@@ -66,6 +74,7 @@ class HttpKbPartnersClient:
             on_behalf_of=None,
             correlation_id=correlation_id,
             json=body,
+            idempotency_key=f"create:{chat_session_id}",
         )
 
     async def classify(
@@ -80,6 +89,7 @@ class HttpKbPartnersClient:
             operation="classify",
             on_behalf_of=on_behalf_of,
             correlation_id=correlation_id,
+            idempotency_key=f"classify:{request_id}",
         )
 
     async def dispatch(
@@ -94,6 +104,7 @@ class HttpKbPartnersClient:
             operation="dispatch",
             on_behalf_of=on_behalf_of,
             correlation_id=correlation_id,
+            idempotency_key=f"dispatch:{request_id}",
         )
 
     async def get_status(
@@ -123,11 +134,16 @@ class HttpKbPartnersClient:
         on_behalf_of: str | None,
         correlation_id: str | None,
         json: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
     ) -> PartnerRequestRef:
         try:
             # Заголовки (вкл. получение токена) — ВНУТРИ try: сбой token-exchange
             # деградирует в unavailable, а не валит ход (CC-1).
-            headers = await self._headers(on_behalf_of=on_behalf_of, correlation_id=correlation_id)
+            headers = await self._headers(
+                on_behalf_of=on_behalf_of,
+                correlation_id=correlation_id,
+                idempotency_key=idempotency_key,
+            )
             kwargs: dict[str, Any] = {"headers": headers}
             if json is not None:
                 kwargs["json"] = json

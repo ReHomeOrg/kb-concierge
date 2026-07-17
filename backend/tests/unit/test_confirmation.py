@@ -40,3 +40,15 @@ def test_no_takes_priority_over_yes() -> None:
 def test_short_yes_not_substring_false_positive() -> None:
     # «да» как подстрока в «удача» не считается согласием.
     assert detect_confirmation("какая удача") is Confirmation.UNCLEAR
+
+
+@pytest.mark.parametrize("text", ["да!", "да.", "да,", "Да!", "ок!", "да )", "ага... да."])
+def test_short_yes_with_punctuation(text: str) -> None:
+    # Регресс: короткое согласие с пунктуацией («да!», «да.») должно распознаваться (FR-7.4).
+    assert detect_confirmation(text) is Confirmation.YES
+
+
+@pytest.mark.parametrize("text", ["правда была хорошей", "удачи", "ода радости"])
+def test_short_yes_no_false_positive_in_words(text: str) -> None:
+    # «да» внутри слова не считается согласием (граница слова).
+    assert detect_confirmation(text) is Confirmation.UNCLEAR

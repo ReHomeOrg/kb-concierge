@@ -40,10 +40,12 @@ DEFAULT_MATRIX: dict[Intent, IntentRule] = {
         autonomous=AgentActionKind.ANSWER,
         allowed_tools=("kb.search",),
     ),
-    # Создаёт заявку + подбор, но платное → подтверждение пользователя (FR-7.4).
+    # Создаёт заявку + классификация + диспетч партнёру; платное/необратимое →
+    # подтверждение пользователя (FR-7.4). `partners.dispatch` исполняется ТОЛЬКО
+    # после согласия (R3, необратимо).
     Intent.PARTNER_SERVICE: IntentRule(
         autonomous=AgentActionKind.TOOL_CALL,
-        allowed_tools=("partners.create_request", "partners.classify"),
+        allowed_tools=("partners.create_request", "partners.classify", "partners.dispatch"),
         requires_confirmation=True,
     ),
     # Заводит тикет / типовой ответ; ЛЮБАЯ претензия/деньги/спор → handoff (сигналы).
@@ -73,7 +75,7 @@ class AutonomyMatrix:
     """Матрица автономности: правила по намерениям + порог уверенности."""
 
     rules: dict[Intent, IntentRule] = field(default_factory=lambda: dict(DEFAULT_MATRIX))
-    confidence_threshold: float = 0.7
+    confidence_threshold: float = 0.75  # ТЗ Док.2 (CONFIDENCE_THRESHOLD)
     version: str = POLICY_VERSION
 
     def rule_for(self, intent: Intent) -> IntentRule:

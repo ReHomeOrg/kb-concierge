@@ -17,15 +17,27 @@ from api.auth.system_actors import AGENT_ACTOR_ID
 from api.config import Settings
 from api.errors import ProblemException
 from api.handoff.service import HandoffService
+from api.intent.engine import category_scores, negates_category
 from api.intent.enums import Intent
 from api.intent.service import IntentService
 from api.observability.agent_metrics import (
     record_action,
     record_confirmation,
     record_intent,
+    record_order_missing_field,
+    record_order_step,
     record_policy,
 )
 from api.observability.pii_mask import mask_pii
+from api.orders import (
+    ORDER_CATEGORIES,
+    OrderAction,
+    build_fields_prompt,
+    build_raw_input,
+    extract_fields,
+    missing_fields,
+    required_keys,
+)
 from api.policy.engine import PolicyDecision
 from api.policy.enums import AgentActionKind, DecisionReason
 from api.policy.service import PolicyService
@@ -43,6 +55,20 @@ _DEGRADED_REPLY = "Принял ваше сообщение, обрабатыв�
 # Ответы разрешения подтверждения (FR-7.4).
 _DECLINE_REPLY = "Хорошо, отменил. Если понадобится — обращайтесь."
 _REASK_REPLY = "Нужно ваше подтверждение: оформляем заявку? Ответьте «да» или «нет»."
+# Уверенность собранной заявки на шаге подтверждения (не low-confidence; §1).
+_ORDER_READY_CONFIDENCE = 0.9
+# ERR-30: сколько low-confidence уточнений допустимо подряд до handoff (≤1 вопрос,
+# затем человек — доктрина «минимум вопросов»).
+_MAX_LOW_CONFIDENCE_CLARIFIES = 1
+_PARTNER_SERVICE_VALUE = Intent.PARTNER_SERVICE.value
+# Фолбэк-вопрос, если для поля не нашёлся текст (защитный; обычно не достигается).
+_FIELD_FALLBACK_REPLY = "Уточните, пожалуйста, детали заявки."
+# Пересылка реплики пользователя в тикет после эскалации (диалог у специалиста).
+_FORWARDED_REPLY = "Передал ваше сообщение специалисту — он ответит здесь."
+_FORWARD_PENDING_REPLY = (
+    "Ваше обращение уже у специалиста. Не получилось передать дополнение прямо сейчас — "
+    "попробуйте чуть позже, либо дождитесь ответа."
+)
 
 
 @dataclass
@@ -174,6 +200,13 @@ class SessionService:
         session = await self._repo.get_for_update(session_id)
         if session is None or not can_access(principal, session):
             raise ProblemException.not_found(detail="Session not found")
+        if session.status is SessionStatus.HANDED_OFF:
+            # Диалог у специалиста: реплику пользователя НЕ гоняем через агента, а
+            # пересылаем в тикет внешним сообщением (support.add_message). Пользователь
+            # не блокируется 409 (UX-фикс).
+            return await self._forward_to_operator(
+                session, principal, content, correlation_id, reasoning_loop, handoff_service
+            )
         if session.status is not SessionStatus.ACTIVE:
             raise ProblemException.conflict(detail="Session is not active")
 
@@ -199,6 +232,12 @@ class SessionService:
         extra_audits: list[tuple[str, str | None, str | None]] = []
         if session.pending_action is not None:
             reply, loop_result = await self._resolve_pending(
+                session, masked, tool_context, reasoning_loop, user_turn, extra_audits
+            )
+        elif session.flow_state is not None:
+            # Идёт сбор обязательных полей заявки (R1): реплика — ответ на вопрос, НЕ
+            # подтверждение. Ветка ДО confirmation-гейта (B1 ревью).
+            reply, loop_result = await self._route_order_flow(
                 session, masked, tool_context, reasoning_loop, user_turn, extra_audits
             )
         else:
@@ -272,6 +311,79 @@ class SessionService:
             ),
         )
 
+    async def _forward_to_operator(
+        self,
+        session: AgentSession,
+        principal: Principal,
+        content: str,
+        correlation_id: str | None,
+        reasoning_loop: ReasoningLoop,
+        handoff_service: HandoffService,
+    ) -> PostedTurn:
+        """Переслать реплику пользователя в тикет после эскалации (диалог у специалиста).
+
+        Сессия HANDED_OFF: агент не отвечает, сообщение уходит ВНЕШНИМ сообщением в тикет
+        kb-support (`support.add_message`, on-behalf-of пользователя G7, маскировано G3).
+        Нет активной эскалации/тикета или сосед недоступен → деградация (FR-6.6): сообщение
+        сохранено, ответ — «передам позже». Пользователь больше не блокируется 409.
+        """
+        base_ts = self._repo.now()
+        masked = mask_pii(content)
+        user_turn = AgentTurn(
+            session_id=session.id,
+            role=TurnRole.USER,
+            content=content,
+            content_masked=masked,
+            correlation_id=correlation_id,
+            ts=base_ts,
+        )
+        self._repo.add_turn(user_turn)
+        self._repo.add_audit(
+            session_id=session.id,
+            actor_id=_audit_actor(principal),
+            action=AuditAction.MESSAGE_RECEIVED.value,
+            correlation_id=correlation_id,
+        )
+
+        ticket_ref = await handoff_service.active_ticket_ref(session.id)
+        forwarded = False
+        if ticket_ref:
+            context = ToolContext(
+                on_behalf_of=session.user_id,
+                correlation_id=correlation_id,
+                session_id=str(session.id),
+            )
+            forwarded = await reasoning_loop.forward_to_ticket(ticket_ref, masked, context)
+        if forwarded:
+            self._repo.add_audit(
+                session_id=session.id,
+                actor_id=AGENT_ACTOR_ID,
+                action=AuditAction.TOOL_CALLED.value,
+                from_value="ok",
+                to_value="support.add_message",
+                correlation_id=correlation_id,
+            )
+
+        reply = _FORWARDED_REPLY if forwarded else _FORWARD_PENDING_REPLY
+        agent_turn = AgentTurn(
+            session_id=session.id,
+            role=TurnRole.AGENT,
+            content=reply,
+            content_masked=reply,
+            correlation_id=correlation_id,
+            ts=base_ts + datetime.timedelta(milliseconds=1),
+        )
+        self._repo.add_turn(agent_turn)
+        self._repo.add_audit(
+            session_id=session.id,
+            actor_id=AGENT_ACTOR_ID,
+            action=AuditAction.AGENT_RESPONDED.value,
+            correlation_id=correlation_id,
+        )
+        await self._repo.flush_refresh(agent_turn)
+        await self._repo.commit()
+        return PostedTurn(turn=agent_turn)
+
     def _emit_action_event(
         self, session: AgentSession, intent: str, kind: str, correlation_id: str | None
     ) -> None:
@@ -283,6 +395,52 @@ class SessionService:
                 events.action_payload(session_id=session.id, intent=intent, kind=kind),
                 correlation_id,
             )
+
+    def _detect_category_switch(self, current: str, masked: str) -> str | None:
+        """ERR-02: явная коррекция категории заявки → новая order-категория или None.
+
+        Консервативно: переключаем только при позитивном сигнале другой order-
+        категории И (её счёт строго выше текущей ИЛИ текущая явно отрицается «не …»).
+        Так попутное упоминание («уборка после ремонта») НЕ триггерит смену.
+        """
+        text = masked.lower()
+        scores = category_scores(text)
+        current_score = scores.get(current, 0)
+        others = {
+            c: s for c, s in scores.items() if c in ORDER_CATEGORIES and c != current and s > 0
+        }
+        if not others:
+            return None
+        best = max(others, key=lambda c: others[c])
+        if others[best] > current_score or negates_category(text, current):
+            return best
+        return None
+
+    def _apply_low_confidence_streak(
+        self, session: AgentSession, decision: PolicyDecision
+    ) -> PolicyDecision:
+        """ERR-30: повтор низкой уверенности → handoff («≤1 уточняющий вопрос»).
+
+        Первое low-confidence уточнение проходит как CLARIFY; если СЛЕДУЮЩИЙ ход
+        снова низкоуверенный — эскалируем человеку (LOW_CONFIDENCE_EXHAUSTED), не
+        зацикливая уточнения. Любой иной исход общего хода сбрасывает счётчик.
+        """
+        is_low_conf = (
+            decision.outcome is AgentActionKind.CLARIFY
+            and decision.reason is DecisionReason.LOW_CONFIDENCE
+        )
+        if not is_low_conf:
+            session.low_confidence_streak = 0
+            return decision
+        if session.low_confidence_streak >= _MAX_LOW_CONFIDENCE_CLARIFIES:
+            session.low_confidence_streak = 0
+            return PolicyDecision(
+                AgentActionKind.HANDOFF,
+                DecisionReason.LOW_CONFIDENCE_EXHAUSTED,
+                decision.policy_version,
+            )
+        session.low_confidence_streak += 1
+        return decision
 
     async def _route_new(
         self,
@@ -304,20 +462,11 @@ class SessionService:
         if outcome is None:
             return _DEGRADED_REPLY, None
         decision = self._policy.decide(outcome.intent, outcome.confidence, masked)
-        loop_result = await reasoning_loop.run(
-            decision=decision,
-            intent=outcome.intent,
-            query_masked=masked,
-            context=tool_context,
-            confirmed=False,
-        )
+        decision = self._apply_low_confidence_streak(session, decision)
         trace = outcome.to_trace(base_ts)
         trace["policy"] = decision.to_trace()
-        trace["loop"] = loop_result.to_trace()
         user_turn.intent = outcome.intent.value
         user_turn.confidence = outcome.confidence
-        user_turn.intent_trace = trace
-
         extra_audits.append(
             (AuditAction.INTENT_CLASSIFIED.value, outcome.method, outcome.intent.value)
         )
@@ -327,6 +476,31 @@ class SessionService:
         # Наблюдаемость решений агента (§11, M8): низкокардинальные enum-лейблы.
         record_intent(outcome.intent.value, outcome.method)
         record_policy(decision.outcome.value, decision.reason.value)
+
+        # R1: партнёрская услуга с известной категорией и нехваткой обязательных полей
+        # §3 → начать их сбор (заявку НЕ создаём до полноты, A1). Иначе — обычный ход.
+        category = (
+            str(outcome.slots.get("category", ""))
+            if outcome.intent is Intent.PARTNER_SERVICE
+            else ""
+        )
+        if decision.outcome is AgentActionKind.TOOL_CALL and category in ORDER_CATEGORIES:
+            answers = extract_fields(category, masked)
+            missing = missing_fields(category, answers)
+            if missing:
+                return self._begin_order_flow(
+                    session, category, answers, missing[0], masked, trace, user_turn, extra_audits
+                )
+
+        loop_result = await reasoning_loop.run(
+            decision=decision,
+            intent=outcome.intent,
+            query_masked=masked,
+            context=tool_context,
+            confirmed=False,
+        )
+        trace["loop"] = loop_result.to_trace()
+        user_turn.intent_trace = trace
         kind = _action_kind(loop_result, decision.outcome)
         record_action(kind)
 
@@ -359,6 +533,160 @@ class SessionService:
                 (
                     AuditAction.CONFIRMATION_REQUESTED.value,
                     outcome.intent.value,
+                    decision.reason.value,
+                )
+            )
+        return loop_result.reply, loop_result
+
+    def _begin_order_flow(
+        self,
+        session: AgentSession,
+        category: str,
+        answers: dict[str, str],
+        asking: str,
+        masked: str,
+        trace: dict[str, Any],
+        user_turn: AgentTurn,
+        extra_audits: list[tuple[str, str | None, str | None]],
+    ) -> tuple[str, LoopResult | None]:
+        """Начать сбор обязательных полей заявки (R1): сохранить контекст, задать вопрос.
+
+        `flow_state` хранит ТОЛЬКО маскированные значения (G3) — диалоговая память,
+        не доменное состояние. Заявка не создаётся, пока поля не полны (A1).
+        """
+        session.flow_state = {
+            "category": category,
+            "answers": answers,
+            "asking": asking,
+            "original_masked": masked,
+        }
+        trace["order"] = {"action": OrderAction.ASK_FIELDS.value, "asking": asking}
+        user_turn.intent_trace = trace
+        record_order_step(category, OrderAction.ASK_FIELDS.value)
+        record_order_missing_field(category, asking)
+        record_action("clarify")
+        extra_audits.append((AuditAction.ORDER_FIELD_REQUESTED.value, category, asking))
+        # Один батч-вопрос на все недостающие поля (ERR-03); `asking` (первое поле) —
+        # для free-text fallback на следующем ходе.
+        return build_fields_prompt(category, missing_fields(category, answers)) or (
+            _FIELD_FALLBACK_REPLY
+        ), None
+
+    async def _route_order_flow(
+        self,
+        session: AgentSession,
+        masked: str,
+        tool_context: ToolContext,
+        reasoning_loop: ReasoningLoop,
+        user_turn: AgentTurn,
+        extra_audits: list[tuple[str, str | None, str | None]],
+    ) -> tuple[str, LoopResult | None]:
+        """Шаг сбора полей заявки (R1): реплика — ответ на вопрос (не подтверждение, B1).
+
+        Распознаёт значения из реплики + фиксирует ответ на заданное поле (маскировано,
+        G3). Не хватает полей → следующий вопрос; полно → предложение диспетча под
+        явным подтверждением (FR-7.4). Поток ограничен числом полей §3 (терминируется).
+        """
+        flow = dict(session.flow_state or {})
+        category = str(flow.get("category", ""))
+        answers: dict[str, str] = dict(flow.get("answers", {}))
+        asking = flow.get("asking")
+        original = str(flow.get("original_masked", ""))
+        user_turn.intent = _PARTNER_SERVICE_VALUE
+
+        # Стоп-сигнал ВНУТРИ сбора полей (претензия/деньги/необратимое) — прервать сбор и
+        # эскалировать (G6, safety-first): жалоба посреди оформления не должна теряться.
+        interrupt = self._policy.decide(Intent.PARTNER_SERVICE, _ORDER_READY_CONFIDENCE, masked)
+        if interrupt.outcome is AgentActionKind.HANDOFF:
+            session.flow_state = None
+            loop_result = await reasoning_loop.run(
+                decision=interrupt,
+                intent=Intent.PARTNER_SERVICE,
+                query_masked=masked,
+                context=tool_context,
+                confirmed=False,
+            )
+            user_turn.intent_trace = {
+                "order": {"interrupted": interrupt.reason.value},
+                "policy": interrupt.to_trace(),
+                "loop": loop_result.to_trace(),
+            }
+            record_policy(interrupt.outcome.value, interrupt.reason.value)
+            record_action(_action_kind(loop_result, interrupt.outcome))
+            extra_audits.append(
+                (AuditAction.POLICY_DECISION.value, interrupt.outcome.value, interrupt.reason.value)
+            )
+            return loop_result.reply, loop_result
+
+        # ERR-02: пользователь поправил категорию посреди сбора («это ремонт, не
+        # уборка»). Реклассифицируем БЕЗ сброса уже собранных полей: переносим те,
+        # что валидны для новой категории (пересечение ключей), остальное — заново.
+        switched = self._detect_category_switch(category, masked)
+        if switched is not None:
+            answers = {k: v for k, v in answers.items() if k in required_keys(switched)}
+            category = switched
+            asking = None  # прежний заданный вопрос больше не релевантен
+            extra_audits.append((AuditAction.ORDER_RECLASSIFIED.value, category, None))
+            record_order_step(category, OrderAction.ASK_FIELDS.value)
+
+        for key, value in extract_fields(category, masked).items():
+            answers.setdefault(key, value)
+        if isinstance(asking, str) and not answers.get(asking):
+            answers[asking] = masked  # явный ответ на заданный вопрос (маскирован, G3)
+
+        missing = missing_fields(category, answers)
+        trace: dict[str, Any] = {
+            "order": {"category": category, "answered": sorted(answers), "missing": list(missing)}
+        }
+
+        if missing:
+            next_field = missing[0]
+            session.flow_state = {
+                "category": category,
+                "answers": answers,
+                "asking": next_field,
+                "original_masked": original,
+            }
+            trace["order"]["action"] = OrderAction.ASK_FIELDS.value
+            user_turn.intent_trace = trace
+            record_order_step(category, OrderAction.ASK_FIELDS.value)
+            record_order_missing_field(category, next_field)
+            record_action("clarify")
+            extra_audits.append((AuditAction.ORDER_FIELD_REQUESTED.value, category, next_field))
+            # Один батч-вопрос на все ещё недостающие поля (ERR-03).
+            return build_fields_prompt(category, missing) or _FIELD_FALLBACK_REPLY, None
+
+        # Поля собраны → предложение диспетча под подтверждением (FR-7.4). Полный
+        # маскированный текст (обращение + ответы) уходит в kb-partners как авторитет.
+        raw_input = build_raw_input(original, answers)
+        decision = self._policy.decide(Intent.PARTNER_SERVICE, _ORDER_READY_CONFIDENCE, raw_input)
+        loop_result = await reasoning_loop.run(
+            decision=decision,
+            intent=Intent.PARTNER_SERVICE,
+            query_masked=raw_input,
+            context=tool_context,
+            confirmed=False,
+        )
+        trace["order"]["action"] = OrderAction.READY_TO_DISPATCH.value
+        trace["loop"] = loop_result.to_trace()
+        user_turn.intent_trace = trace
+        session.flow_state = None  # собрано → дальше confirmation-гейт (pending_action)
+        record_order_step(category, OrderAction.READY_TO_DISPATCH.value)
+        record_action(_action_kind(loop_result, decision.outcome))
+
+        if loop_result.awaiting_confirmation:
+            session.pending_action = {
+                "tools": list(decision.allowed_tools),
+                "intent": _PARTNER_SERVICE_VALUE,
+                "query_masked": raw_input,  # маскированный полный текст (G3)
+                "policy_version": decision.policy_version,
+                "reason": decision.reason.value,
+            }
+            record_confirmation("requested")
+            extra_audits.append(
+                (
+                    AuditAction.CONFIRMATION_REQUESTED.value,
+                    _PARTNER_SERVICE_VALUE,
                     decision.reason.value,
                 )
             )
@@ -399,6 +727,7 @@ class SessionService:
             trace["loop"] = loop_result.to_trace()
             user_turn.intent_trace = trace
             session.pending_action = None
+            session.flow_state = None  # заявка оформлена → сбор полей завершён
             kind = "action_taken" if loop_result.action_taken else "degraded"
             record_action(kind)
             if self._settings.webhook_subscriber_url:
@@ -410,6 +739,7 @@ class SessionService:
         user_turn.intent_trace = trace
         if verdict is Confirmation.NO:
             session.pending_action = None  # отказ — действие не инициируется
+            session.flow_state = None  # и сбор полей сброшен
             return _DECLINE_REPLY, None
         # UNCLEAR → переспрашиваем, отложенное действие сохраняется.
         return _REASK_REPLY, None

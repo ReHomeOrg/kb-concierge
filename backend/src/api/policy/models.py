@@ -30,7 +30,7 @@ class AutonomyPolicy(Base, TimestampMixin):
     active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
-    confidence_threshold: Mapped[float] = mapped_column(Float, nullable=False, default=0.7)
+    confidence_threshold: Mapped[float] = mapped_column(Float, nullable=False, default=0.75)
     # Переопределение правил матрицы (JSON по намерениям). NULL → встроенный DEFAULT_MATRIX.
     rules: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 

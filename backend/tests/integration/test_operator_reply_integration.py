@@ -96,6 +96,36 @@ async def test_operator_reply_appends_turn_to_dialog(
     assert AuditAction.OPERATOR_REPLIED.value in actions
 
 
+async def test_operator_reply_is_idempotent_on_repeat_webhook(
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
+    session: AsyncSession,
+) -> None:
+    # ERR-18: повторный вебхук с тем же Idempotency-Key не дублирует реплику.
+    _override_handoff(session)
+    sess = await seed_session(user_id="u-1", status=SessionStatus.HANDED_OFF)
+    await _seed_handoff(session, sess.id)
+    service = make_principal(PrincipalKind.SERVICE)
+    body = {"session_id": str(sess.id), "message": "Один ответ.", "ticket_ref": "T-1"}
+    headers = {"Idempotency-Key": "op-reply-key-1"}
+
+    r1 = await make_client(service).post(_INBOUND, json=body, headers=headers)
+    r2 = await make_client(service).post(_INBOUND, json=body, headers=headers)
+    assert r1.status_code == 202
+    assert r2.status_code == 202
+    assert r1.json()["id"] == r2.json()["id"]  # та же реплика, не новая
+
+    turns = (
+        await session.scalars(
+            select(AgentTurn).where(
+                AgentTurn.session_id == sess.id, AgentTurn.role == TurnRole.OPERATOR
+            )
+        )
+    ).all()
+    assert len(turns) == 1  # без дубля
+
+
 async def test_operator_reply_masks_pii_in_masked_copy(
     make_client: MakeClient,
     make_principal: MakePrincipal,
