@@ -13,6 +13,7 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from api.onboarding.guide import OnboardingGuide
 from api.sessions.enums import AccessLevel, SessionStatus, TurnRole
 from api.sessions.models import AgentSession, AgentTurn
 
@@ -63,6 +64,51 @@ class OptionOut(BaseModel):
 
     id: str
     label: str
+
+
+class OnboardingStepOut(BaseModel):
+    """Шаг пути онбординга для прогресс-карты (N4): id + человеческий заголовок."""
+
+    step_id: str
+    title: str
+
+
+class OnboardingGuideOut(BaseModel):
+    """Гид текущего шага онбординга (read-only поверхность, «один экран за раз»).
+
+    `known` — известен ли статус (False → режим ПУТИ: показываем шаги, не утверждая
+    позицию). `complete` — полная верификация (финал на ценности). `screen_ref` —
+    какой экран показать (None при complete/режиме пути). `done`/`total` — прогресс (N4).
+    `path` — все шаги роли для карты. `blocker_reason` — причина блокера (C25), если есть.
+    """
+
+    role: str
+    known: bool
+    complete: bool
+    title: str
+    why: str
+    step_id: str | None = None
+    screen_ref: str | None = None
+    done: int
+    total: int
+    blocker_reason: str | None = None
+    path: list[OnboardingStepOut] = Field(default_factory=list)
+
+    @classmethod
+    def from_guide(cls, guide: OnboardingGuide) -> OnboardingGuideOut:
+        return cls(
+            role=guide.role,
+            known=guide.known,
+            complete=guide.complete,
+            title=guide.title,
+            why=guide.why,
+            step_id=guide.step_id,
+            screen_ref=guide.screen_ref,
+            done=guide.done,
+            total=guide.total,
+            blocker_reason=guide.blocker_reason,
+            path=[OnboardingStepOut(step_id=sid, title=title) for sid, title in guide.path],
+        )
 
 
 class TurnRead(BaseModel):
