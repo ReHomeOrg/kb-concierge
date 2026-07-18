@@ -151,3 +151,28 @@ async def test_onboarding_owner_role_known_status(
     resp = await client.get(f"{_BASE}/{sess.id}/onboarding?role=owner")
     assert resp.status_code == 200
     assert resp.json()["step_id"] == "O4" and resp.json()["total"] == 5
+
+
+async def test_onboarding_complete_finale(
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
+    session: AsyncSession,
+) -> None:
+    # Известный статус = полная верификация → финал (complete, step_id null).
+    principal = make_principal(PrincipalKind.USER)
+    sess = await seed_session(user_id=str(principal.user_id))
+    client = make_client(principal)
+    app.dependency_overrides[get_session_service] = lambda: _enabled_service(session)
+    app.dependency_overrides[get_onboarding_status_reader] = lambda: _StubReader(
+        {
+            "account": True,
+            "profile_complete": True,
+            "kyc_passed": True,
+            "solvency_confirmed": True,
+        }
+    )
+    resp = await client.get(f"{_BASE}/{sess.id}/onboarding?role=tenant")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["complete"] is True and body["step_id"] is None and body["done"] == 4

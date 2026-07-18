@@ -101,7 +101,7 @@ def build_guide(role: str, status: Mapping[str, bool] | None) -> OnboardingGuide
         )
 
     step = next_step(role, status)
-    if step is None:  # защитно: не complete, но шага нет (недостижимо при валидном автомате)
+    if step is None:  # pragma: no cover — защитно: не complete, но шага нет (недостижимо)
         return None
     return OnboardingGuide(
         role=role,

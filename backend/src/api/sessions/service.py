@@ -244,11 +244,16 @@ class SessionService:
         """
         if not self._settings.onboarding_enabled:
             return None
-        if role not in ONBOARDING_ROLES:
-            return None
+        # Владение проверяем ПЕРВЫМ (self-scoped): невидимая/чужая сессия → 404 до любой
+        # трактовки роли (анти-enumeration, стабильный 404).
         session = await self._repo.get(session_id)
         if session is None or not can_access(principal, session):
             raise ProblemException.not_found(detail="Session not found")
+        # Роль пока из параметра запроса. ХВОСТ (после CC-1/#16): выводить роль из
+        # ПРОВЕРЕННОГО контекста пользователя, а боевой status_reader — self-scoped
+        # (игнорирует несоответствие роль↔пользователь).
+        if role not in ONBOARDING_ROLES:
+            return None
         context = ToolContext(
             on_behalf_of=session.user_id,
             correlation_id=session.correlation_id,

@@ -88,3 +88,27 @@ def test_guide_for_blocker_path_mode_when_status_none() -> None:
     g = guide_for_blocker(ROLE_TENANT, BLOCKER_SOLVENCY_NOT_CONFIRMED, None)
     assert g is not None and g.step_id == "T4" and g.known is False
     assert (g.done, g.total) == (0, 4)
+
+
+def test_guide_for_blocker_stays_incomplete_even_if_status_complete() -> None:
+    # Инвариант: guide_for_blocker всегда complete=False (зовётся в контексте активного
+    # блокера) — указывает на fix-шаг, а не на финал.
+    full = _tenant(profile_complete=True, kyc_passed=True, solvency_confirmed=True)
+    g = guide_for_blocker(ROLE_TENANT, BLOCKER_SOLVENCY_NOT_CONFIRMED, full)
+    assert g is not None and g.complete is False and g.step_id == "T4"
+    assert (g.done, g.total) == (4, 4)
+
+
+def test_owner_complete_is_value_finale() -> None:
+    g = build_guide(
+        ROLE_OWNER,
+        {
+            "account": True,
+            "kyc_passed": True,
+            "object_added": True,
+            "egrn_verified": True,
+            "payout_saved": True,
+        },
+    )
+    assert g is not None and g.complete is True and g.step_id is None
+    assert "листить" in g.title.lower() and (g.done, g.total) == (5, 5)
