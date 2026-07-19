@@ -40,6 +40,7 @@ from api.observability.agent_metrics import (
 from api.observability.pii_mask import mask_pii
 from api.onboarding.constants import ONBOARDING_ROLES
 from api.onboarding.guide import OnboardingGuide, build_guide
+from api.onboarding.recorder import OnboardingOutcomeRecorder
 from api.onboarding.status import OnboardingStatusReader
 from api.orders import (
     ORDER_CATEGORIES,
@@ -233,6 +234,7 @@ class SessionService:
         session_id: uuid.UUID,
         role: str,
         status_reader: OnboardingStatusReader,
+        outcome_recorder: OnboardingOutcomeRecorder,
     ) -> OnboardingGuide | None:
         """Read-only гид онбординга (STATE-triggered поверхность, «один экран за раз»).
 
@@ -240,7 +242,9 @@ class SessionService:
         сессия читается в контексте владельца, невидимая → 404 (анти-enumeration). Статус
         шагов — через seam `status_reader` (боевое делегированное чтение платформы за CC-1/#16);
         `None` → гид в режиме ПУТИ (не утверждаем позицию, FR-6.6). Неизвестная роль → None.
-        Ничего НЕ пишет и НЕ одобряет (G-verification-ceiling): только маршрутизирует к экрану.
+        В СТАТУС ПЛАТФОРМЫ ничего НЕ пишет и НЕ одобряет (G-verification-ceiling/G7): только
+        маршрутизирует к экрану. Побочно — при известном статусе фиксирует позицию воронки в
+        СВОЙ outcome-ledger (телеметрия drop-off, вариант A; config-gated, ошибки глотаются).
         """
         if not self._settings.onboarding_enabled:
             return None
@@ -260,6 +264,10 @@ class SessionService:
             session_id=str(session.id),
         )
         status = await status_reader.read(role, context)
+        # Эмиссия в ledger (вариант A): известный статус + не-аноним. Режим ПУТИ (status
+        # None) и анонимы (нет стабильного ключа воронки) — не пишем.
+        if status is not None and session.user_id is not None:
+            await outcome_recorder.record(role, session.user_id, status)
         return build_guide(role, status)
 
     async def post_message(

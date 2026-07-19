@@ -19,10 +19,12 @@ from api.handoff.dependencies import get_handoff_service
 from api.handoff.schemas import ForceHandoffRequest, HandoffAccepted
 from api.handoff.service import HandoffService
 from api.observability.context import get_request_id
+from api.onboarding.recorder import OnboardingOutcomeRecorder
 from api.onboarding.status import OnboardingStatusReader
 from api.reasoning.dependencies import get_reasoning_loop
 from api.reasoning.loop import ReasoningLoop
 from api.sessions.dependencies import (
+    get_onboarding_outcome_recorder,
     get_onboarding_status_reader,
     get_rate_limiter,
     get_session_service,
@@ -85,14 +87,18 @@ async def onboarding_guide_endpoint(
     principal: Principal = Depends(get_current_principal),
     service: SessionService = Depends(get_session_service),
     status_reader: OnboardingStatusReader = Depends(get_onboarding_status_reader),
+    outcome_recorder: OnboardingOutcomeRecorder = Depends(get_onboarding_outcome_recorder),
 ) -> OnboardingGuideOut:
     """Следующий целевой экран онбординга + прогресс (детерминированно из состояния).
 
     STATE-triggered поверхность (фронт запрашивает, что показать сейчас). Config-gated
     (`onboarding_enabled`); выключено/неизвестная роль/невидимая сессия → 404. Статус
-    неизвестен (до боевого делегированного чтения) → режим ПУТИ. Ничего не пишет (G7).
+    неизвестен (до боевого делегированного чтения) → режим ПУТИ. В статус платформы ничего
+    не пишет (G7); побочно фиксирует позицию воронки в свой ledger (config-gated телеметрия).
     """
-    guide = await service.onboarding_guide(principal, session_id, role, status_reader)
+    guide = await service.onboarding_guide(
+        principal, session_id, role, status_reader, outcome_recorder
+    )
     if guide is None:
         raise ProblemException.not_found(detail="Onboarding guide not available")
     return OnboardingGuideOut.from_guide(guide)
