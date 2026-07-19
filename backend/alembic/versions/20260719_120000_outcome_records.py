@@ -35,7 +35,7 @@ def upgrade() -> None:
         sa.Column("role", sa.String(length=32), nullable=True),
         sa.Column("furthest_step", sa.String(length=64), nullable=True),
         sa.Column("step_seq", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("state", sa.String(length=16), nullable=False),
+        sa.Column("state", sa.String(length=16), nullable=False, server_default="OPEN"),
         sa.Column("result", sa.String(length=16), nullable=True),
         sa.Column(
             "opened_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False

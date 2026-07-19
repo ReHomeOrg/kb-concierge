@@ -53,6 +53,8 @@ class OutcomeRecord(Base, TimestampMixin):
         Enum(OutcomeState, native_enum=False, length=_ENUM_LEN),
         nullable=False,
         default=OutcomeState.OPEN,
+        # server_default консистентно со step_seq/meta; safety при raw INSERT в обход ORM.
+        server_default=OutcomeState.OPEN.value,
     )
     result: Mapped[OutcomeResult | None] = mapped_column(
         Enum(OutcomeResult, native_enum=False, length=_ENUM_LEN), nullable=True

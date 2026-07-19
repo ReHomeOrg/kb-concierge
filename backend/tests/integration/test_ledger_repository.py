@@ -86,6 +86,58 @@ async def test_progress_advances_only_forward_but_resets_timer(session: AsyncSes
     assert len(rows) == 1
 
 
+async def test_progress_equal_step_seq_does_not_advance(session: AsyncSession) -> None:
+    """Граница forward-only (`step_seq > record.step_seq`): равный seq НЕ двигает воронку."""
+    repo = LedgerRepository(session)
+    await repo.record_progress(
+        OutcomeKind.ONBOARDING,
+        "subj-eq",
+        step="s2",
+        step_seq=2,
+        now=_NOW,
+        settle_after_seconds=_WINDOW,
+    )
+    rec = await repo.record_progress(
+        OutcomeKind.ONBOARDING,
+        "subj-eq",
+        step="other-s2",
+        step_seq=2,
+        now=_NOW,
+        settle_after_seconds=_WINDOW,
+    )
+    await session.flush()
+    assert rec.furthest_step == "s2"  # равный seq не перезаписал шаг
+    assert rec.step_seq == 2
+
+
+async def test_progress_merges_meta(session: AsyncSession) -> None:
+    """`meta` накапливается поверх (обезличенные счётчики), не затирается целиком."""
+    repo = LedgerRepository(session)
+    await repo.record_progress(
+        OutcomeKind.ONBOARDING,
+        "subj-meta",
+        step="s1",
+        step_seq=1,
+        now=_NOW,
+        settle_after_seconds=_WINDOW,
+        meta={"steps_seen": 1, "channel": "web"},
+    )
+    rec = await repo.record_progress(
+        OutcomeKind.ONBOARDING,
+        "subj-meta",
+        step="s2",
+        step_seq=2,
+        now=_NOW,
+        settle_after_seconds=_WINDOW,
+        meta={"steps_seen": 2},
+    )
+    await session.flush()
+    assert rec.meta == {
+        "steps_seen": 2,
+        "channel": "web",
+    }  # merge: обновил счётчик, сохранил channel
+
+
 async def test_record_completion_settles_completed(session: AsyncSession) -> None:
     repo = LedgerRepository(session)
     await repo.record_progress(

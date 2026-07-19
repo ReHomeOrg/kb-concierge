@@ -53,6 +53,11 @@ class LedgerRepository:
         (повтор/возврат на ранний шаг не откатывает воронку). Любая активность сдвигает
         `last_progress_at`+`settle_after` (сброс таймера брошенности). `meta` мержится
         поверх (обезличенные счётчики).
+
+        Конкурентность: инвариант «≤1 OPEN на (kind, subject_key)» гарантирует частичный
+        уникальный индекс `uq_outcome_open_per_subject` на уровне БД. При гонке двух
+        первых INSERT второй получит IntegrityError — продюсер (срез эмиссии) обязан
+        трактовать это как «OPEN уже создан» (retry/повторное чтение), а не как сбой.
         """
         settle_at = now + datetime.timedelta(seconds=settle_after_seconds)
         record = await self._get_open(kind, subject_key)

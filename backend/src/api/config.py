@@ -183,9 +183,9 @@ class Settings(BaseSettings):
     outcome_ledger_enabled: bool = Field(
         default=False, description="Outcome-ledger + settle-воркер. OFF → ledger дремлет."
     )
-    # Окно бездействия OPEN-записи до пометки ABANDONED (по умолчанию сутки).
-    outcome_settle_after_seconds: float = Field(default=86400.0, gt=0)
     outcome_settle_batch_size: int = Field(default=100, ge=1, le=1000)
+    # NB: окно бездействия OPEN→ABANDONED (`settle_after_seconds`) задаёт продюсер при
+    # записи прогресса — конфиг-поле появится в срезе эмиссии, где реально читается.
 
 
 @lru_cache(maxsize=1)
