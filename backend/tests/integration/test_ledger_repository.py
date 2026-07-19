@@ -45,7 +45,7 @@ async def test_record_progress_creates_open_record(session: AsyncSession) -> Non
     assert rec.settle_after == _NOW + datetime.timedelta(seconds=_WINDOW)
 
 
-async def test_progress_advances_only_forward_but_resets_timer(session: AsyncSession) -> None:
+async def test_progress_forward_resets_timer_but_review_does_not(session: AsyncSession) -> None:
     repo = LedgerRepository(session)
     await repo.record_progress(
         OutcomeKind.ONBOARDING,
@@ -55,16 +55,19 @@ async def test_progress_advances_only_forward_but_resets_timer(session: AsyncSes
         now=_NOW,
         settle_after_seconds=_WINDOW,
     )
+    # Реальный прогресс до s3 в момент `progressed` → таймер сброшен на progressed+window.
+    progressed = _NOW + datetime.timedelta(minutes=5)
     await repo.record_progress(
         OutcomeKind.ONBOARDING,
         "subj-b",
         step="s3",
         step_seq=3,
-        now=_NOW,
+        now=progressed,
         settle_after_seconds=_WINDOW,
     )
     later = _NOW + datetime.timedelta(minutes=10)
-    # Возврат на ранний шаг НЕ откатывает воронку, но активность сдвигает settle_after.
+    # Повторный просмотр/возврат на ранний шаг НЕ двигает воронку и НЕ продлевает окно
+    # брошенности (иначе поллинг вечно держал бы путь OPEN → занижение drop-off).
     rec = await repo.record_progress(
         OutcomeKind.ONBOARDING,
         "subj-b",
@@ -76,7 +79,8 @@ async def test_progress_advances_only_forward_but_resets_timer(session: AsyncSes
     await session.flush()
     assert rec.furthest_step == "s3"
     assert rec.step_seq == 3
-    assert rec.settle_after == later + datetime.timedelta(seconds=_WINDOW)
+    # Окно осталось привязанным к ПОСЛЕДНЕМУ прогрессу (s3@progressed), не к просмотру.
+    assert rec.settle_after == progressed + datetime.timedelta(seconds=_WINDOW)
     # Только одна OPEN-запись на субъект (частичный уникальный индекс).
     rows = (
         (await session.execute(select(OutcomeRecord).where(OutcomeRecord.subject_key == "subj-b")))

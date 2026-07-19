@@ -50,9 +50,10 @@ class LedgerRepository:
         """Зафиксировать прогресс субъекта по пути (создаёт OPEN-запись при первом шаге).
 
         Идемпотентно-накопительно: `furthest_step`/`step_seq` двигаются только вперёд
-        (повтор/возврат на ранний шаг не откатывает воронку). Любая активность сдвигает
-        `last_progress_at`+`settle_after` (сброс таймера брошенности). `meta` мержится
-        поверх (обезличенные счётчики).
+        (повтор/возврат на ранний шаг не откатывает воронку). Таймер брошенности
+        (`last_progress_at`+`settle_after`) сбрасывается ТОЛЬКО при реальном продвижении
+        вперёд (рост `step_seq`) — повторный просмотр/пинг НЕ продлевает окно, иначе
+        поллинг вечно держал бы путь OPEN и занижал drop-off KPI. `meta` мержится поверх.
 
         Конкурентность: инвариант «≤1 OPEN на (kind, subject_key)» гарантирует частичный
         уникальный индекс `uq_outcome_open_per_subject` на уровне БД. При гонке двух
@@ -78,12 +79,13 @@ class LedgerRepository:
             return record
 
         if step_seq > record.step_seq:
+            # Реальный прогресс: двигаем позицию воронки и сбрасываем таймер брошенности.
             record.furthest_step = step
             record.step_seq = step_seq
+            record.last_progress_at = now
+            record.settle_after = settle_at
         if role is not None:
             record.role = role
-        record.last_progress_at = now
-        record.settle_after = settle_at
         if meta:
             record.meta = {**record.meta, **meta}
         return record
