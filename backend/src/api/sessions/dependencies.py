@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.config import get_settings
 from api.db import get_session
 from api.intent.service import IntentService, build_intent_classifier
+from api.ledger.repository import LedgerRepository
+from api.onboarding.recorder import OnboardingOutcomeRecorder
 from api.onboarding.status import NullStatusReader, OnboardingStatusReader
 from api.policy.matrix import AutonomyMatrix
 from api.policy.repository import PolicyRepository
@@ -61,3 +63,11 @@ def get_onboarding_status_reader() -> OnboardingStatusReader:
     режиме ПУТИ). Боевое делегированное чтение платформы (CC-1/#16) подменит его позже;
     тесты переопределяют через `app.dependency_overrides`."""
     return NullStatusReader()
+
+
+def get_onboarding_outcome_recorder(
+    db: AsyncSession = Depends(get_session),
+) -> OnboardingOutcomeRecorder:
+    """Проводка позиции воронки в outcome-ledger (вариант A). Config-gated
+    (`outcome_ledger_enabled`): выключено → recorder инертен. Пишет в сессию запроса гида."""
+    return OnboardingOutcomeRecorder(LedgerRepository(db), get_settings())

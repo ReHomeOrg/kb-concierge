@@ -181,11 +181,12 @@ class Settings(BaseSettings):
     # --- Outcome-ledger (L0 KPI-истина: воронка/drop-off, §наблюдаемость). OFF по
     # умолчанию → settle-воркер инертен, таблица дремлет. Своя БД слоя (арх-константа). ---
     outcome_ledger_enabled: bool = Field(
-        default=False, description="Outcome-ledger + settle-воркер. OFF → ledger дремлет."
+        default=False, description="Outcome-ledger + settle-воркер + эмиссия. OFF → ledger дремлет."
     )
     outcome_settle_batch_size: int = Field(default=100, ge=1, le=1000)
-    # NB: окно бездействия OPEN→ABANDONED (`settle_after_seconds`) задаёт продюсер при
-    # записи прогресса — конфиг-поле появится в срезе эмиссии, где реально читается.
+    # Окно бездействия OPEN→ABANDONED: продюсер (эмиссия) кладёт его в settle_after при
+    # каждой записи прогресса; просмотр гида = активность, сбрасывающая таймер. По умолч. сутки.
+    outcome_settle_after_seconds: float = Field(default=86400.0, gt=0)
 
 
 @lru_cache(maxsize=1)
