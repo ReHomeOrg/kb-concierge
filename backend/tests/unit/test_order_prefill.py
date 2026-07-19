@@ -45,9 +45,7 @@ async def test_single_premises_returns_address() -> None:
 
 
 async def test_multiple_premises_returns_none() -> None:
-    loop = _loop(
-        _Platform(ToolResult(data={"premises": [{"address": "A"}, {"address": "B"}]}))
-    )
+    loop = _loop(_Platform(ToolResult(data={"premises": [{"address": "A"}, {"address": "B"}]})))
     assert await loop.fetch_address(_CTX) is None  # неоднозначно → не подставляем
 
 

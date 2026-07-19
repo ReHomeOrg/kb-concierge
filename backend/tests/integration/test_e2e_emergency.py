@@ -66,7 +66,9 @@ async def _post(client: AsyncClient, sid: Any, text: str) -> Any:
 
 
 async def test_gas_offer_to_repair(
-    make_principal: MakePrincipal, seed_session: SeedSession, make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
+    make_client: MakeClient,
     session: AsyncSession,
 ) -> None:
     _override(_ok("partners.create_request", request_id="r"))
@@ -83,7 +85,9 @@ async def test_gas_offer_to_repair(
 
 
 async def test_decline_closes_emergency(
-    make_principal: MakePrincipal, seed_session: SeedSession, make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
+    make_client: MakeClient,
     session: AsyncSession,
 ) -> None:
     _override(_ok("partners.create_request", request_id="r"))
@@ -96,7 +100,9 @@ async def test_decline_closes_emergency(
 
 
 async def test_unclear_reasks_emergency(
-    make_principal: MakePrincipal, seed_session: SeedSession, make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
+    make_client: MakeClient,
     session: AsyncSession,
 ) -> None:
     _override(_ok("partners.create_request", request_id="r"))
@@ -109,7 +115,9 @@ async def test_unclear_reasks_emergency(
 
 
 async def test_fire_terminal_no_partner(
-    make_principal: MakePrincipal, seed_session: SeedSession, make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
+    make_client: MakeClient,
     session: AsyncSession,
 ) -> None:
     _override()
@@ -122,7 +130,9 @@ async def test_fire_terminal_no_partner(
 
 
 async def test_emergency_preempts_pending_confirmation(
-    make_principal: MakePrincipal, seed_session: SeedSession, make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
+    make_client: MakeClient,
     session: AsyncSession,
 ) -> None:
     _override(_ok("partners.create_request", request_id="r"), _ok("partners.classify", number="X"))
@@ -143,7 +153,9 @@ async def test_emergency_preempts_pending_confirmation(
 
 
 async def test_info_question_not_emergency(
-    make_principal: MakePrincipal, seed_session: SeedSession, make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
+    make_client: MakeClient,
     session: AsyncSession,
 ) -> None:
     _override()
@@ -155,7 +167,9 @@ async def test_info_question_not_emergency(
 
 
 async def test_full_chain_plumbing_to_created_request(
-    make_principal: MakePrincipal, seed_session: SeedSession, make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
+    make_client: MakeClient,
 ) -> None:
     create = _ok("partners.create_request", request_id="r", number="EM-1")
     _override(create, _ok("partners.classify", number="EM-1"))
@@ -171,7 +185,9 @@ async def test_full_chain_plumbing_to_created_request(
 
 
 async def test_emergency_confirmation_punctuation_recognized(
-    make_principal: MakePrincipal, seed_session: SeedSession, make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
+    make_client: MakeClient,
     session: AsyncSession,
 ) -> None:
     # Gap закрыт (PR #35 в интеграции): «да!» с пунктуацией распознаётся как согласие,

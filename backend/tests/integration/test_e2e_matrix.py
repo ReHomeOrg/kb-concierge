@@ -95,7 +95,10 @@ async def _actions(session: AsyncSession, sid: Any) -> list[str]:
 
 @pytest.mark.parametrize("cat", list(_CATS))
 async def test_partner_success(
-    cat: str, make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    cat: str,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
     session: AsyncSession,
 ) -> None:
     create = _ok("partners.create_request", request_id="r", number=f"{cat[0]}-1")
@@ -119,7 +122,10 @@ async def test_partner_success(
 
 @pytest.mark.parametrize("cat", list(_CATS))
 async def test_create_unavailable(
-    cat: str, make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    cat: str,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
     session: AsyncSession,
 ) -> None:
     _override(_down("partners.create_request"))
@@ -133,7 +139,9 @@ async def test_create_unavailable(
 
 
 async def test_classify_unavailable_still_creates(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
 ) -> None:
     create = _ok("partners.create_request", request_id="r", number="C-7")
     _override(create, _down("partners.classify"))
@@ -148,7 +156,10 @@ async def test_classify_unavailable_still_creates(
 
 @pytest.mark.parametrize("yes", ["да", "да!", "Да.", "ага, оформляйте", "давайте", "хорошо", "ок!"])
 async def test_yes_variants_execute(
-    yes: str, make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    yes: str,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
 ) -> None:
     create = _ok("partners.create_request", request_id="r", number="P")
     _override(create, _ok("partners.classify", number="P"))
@@ -160,7 +171,10 @@ async def test_yes_variants_execute(
 
 @pytest.mark.parametrize("no", ["нет", "нет!", "не надо", "отмена", "стоп", "передумал"])
 async def test_no_variants_cancel(
-    no: str, make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    no: str,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
 ) -> None:
     create = _ok("partners.create_request", request_id="r")
     _override(create)
@@ -172,7 +186,9 @@ async def test_no_variants_cancel(
 
 
 async def test_unclear_then_yes(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
 ) -> None:
     create = _ok("partners.create_request", request_id="r", number="P")
     _override(create, _ok("partners.classify", number="P"))
@@ -192,7 +208,10 @@ async def test_unclear_then_yes(
     ["верните деньги за услугу", "хочу подать претензию", "отмените мой заказ"],
 )
 async def test_stop_signals_handoff(
-    msg: str, make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    msg: str,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
 ) -> None:
     create = _ok("partners.create_request", request_id="r")
     _override(create)
@@ -206,7 +225,9 @@ async def test_stop_signals_handoff(
 
 
 async def test_support_issue_creates_ticket(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
 ) -> None:
     ticket = _ok("support.create_ticket", ticket_id="T", number="S-1")
     _override(ticket)
@@ -227,7 +248,10 @@ async def test_support_issue_creates_ticket(
     ],
 )
 async def test_intent_routing(
-    msg: str, needle: str, make_client: MakeClient, make_principal: MakePrincipal,
+    msg: str,
+    needle: str,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
     seed_session: SeedSession,
 ) -> None:
     _override()
@@ -240,7 +264,9 @@ async def test_intent_routing(
 
 
 async def test_other_users_session_404(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
 ) -> None:
     _override()
     owner = make_principal(PrincipalKind.USER)
@@ -251,7 +277,8 @@ async def test_other_users_session_404(
 
 
 async def test_unknown_session_404(
-    make_client: MakeClient, make_principal: MakePrincipal,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
 ) -> None:
     _override()
     p = make_principal(PrincipalKind.USER)
@@ -260,7 +287,9 @@ async def test_unknown_session_404(
 
 
 async def test_empty_content_422(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
 ) -> None:
     _override()
     sess, client = await _start(make_principal, seed_session, make_client)
@@ -269,7 +298,9 @@ async def test_empty_content_422(
 
 
 async def test_post_to_forgotten_session_409(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
 ) -> None:
     _override()
     sess, client = await _start(make_principal, seed_session, make_client)
@@ -279,7 +310,9 @@ async def test_post_to_forgotten_session_409(
 
 
 async def test_pii_masked_persisted(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
     session: AsyncSession,
 ) -> None:
     _override()
@@ -303,7 +336,10 @@ async def test_pii_masked_persisted(
     ["верните деньги, ужасный сервис", "хочу подать претензию", "отмените всё"],
 )
 async def test_signal_during_slot_filling_escalates(
-    msg: str, make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    msg: str,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
     session: AsyncSession,
 ) -> None:
     """ФИКС: стоп-сигнал (деньги/претензия/необратимое) ВНУТРИ сбора полей §3 прерывает сбор
