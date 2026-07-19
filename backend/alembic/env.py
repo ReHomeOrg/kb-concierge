@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 # Каждый доменный пакет регистрирует свои таблицы в Base.metadata здесь
 # (добавляется по мере эпиков M1+: sessions/turns/audit/policies).
 import api.handoff.models  # noqa: F401  (§7.3: handoff_records)
+import api.ledger.models  # noqa: F401  (L0 KPI: outcome_records)
 import api.policy.models  # noqa: F401  (§7: autonomy_policies)
 import api.sessions.models  # noqa: F401  (E4: agent_sessions/agent_turns/audit_log)
 import api.webhooks.models  # noqa: F401  (§10: outbox_events)
