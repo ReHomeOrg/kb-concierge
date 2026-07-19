@@ -77,7 +77,9 @@ async def _actions(session: AsyncSession, sid: uuid.UUID) -> list[str]:
 
 
 async def test_claim_escalates_and_marks_handed_off(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
     session: AsyncSession,
 ) -> None:
     _override_handoff(session)
@@ -92,7 +94,9 @@ async def test_claim_escalates_and_marks_handed_off(
 
 
 async def test_user_message_forwarded_to_ticket(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
     session: AsyncSession,
 ) -> None:
     # ФИКС: после эскалации реплика пользователя пересылается в тикет (support.add_message),
@@ -105,9 +109,7 @@ async def test_user_message_forwarded_to_ticket(
     sess = await seed_session(user_id=str(p.user_id))
     client = make_client(p)
     await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": _CLAIM})
-    r2 = await client.post(
-        f"{_MSGS}/{sess.id}/messages", json={"content": "дополню: договор №123"}
-    )
+    r2 = await client.post(f"{_MSGS}/{sess.id}/messages", json={"content": "дополню: договор №123"})
     assert r2.status_code == 200  # больше не 409
     assert "специалист" in r2.json()["content"].lower()
     assert len(add_msg.calls) == 1  # сообщение ушло в тикет
@@ -116,7 +118,9 @@ async def test_user_message_forwarded_to_ticket(
 
 
 async def test_user_message_after_handoff_degrades_not_blocked(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
     session: AsyncSession,
 ) -> None:
     # Нет тикета (PENDING, kb-support был недоступен) → пользователь НЕ заблокирован:
@@ -132,7 +136,9 @@ async def test_user_message_after_handoff_degrades_not_blocked(
 
 
 async def test_force_handoff_endpoint(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
     session: AsyncSession,
 ) -> None:
     _override_handoff(session)
@@ -147,7 +153,9 @@ async def test_force_handoff_endpoint(
 
 
 async def test_operator_reply_lifecycle(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
     session: AsyncSession,
 ) -> None:
     _override_handoff(session)
@@ -171,7 +179,9 @@ async def test_operator_reply_lifecycle(
 
 
 async def test_operator_reply_non_service_403(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
     session: AsyncSession,
 ) -> None:
     _override_handoff(session)
@@ -184,7 +194,9 @@ async def test_operator_reply_non_service_403(
 
 
 async def test_operator_reply_no_active_handoff_404(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
     session: AsyncSession,
 ) -> None:
     _override_handoff(session)
@@ -197,7 +209,9 @@ async def test_operator_reply_no_active_handoff_404(
 
 
 async def test_operator_reply_masks_pii(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
     session: AsyncSession,
 ) -> None:
     _override_handoff(session)

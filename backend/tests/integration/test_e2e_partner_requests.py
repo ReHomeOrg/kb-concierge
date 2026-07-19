@@ -89,7 +89,9 @@ async def _start(make_principal: MakePrincipal, seed_session: SeedSession, make_
 
 
 async def test_cleaning_success(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
     session: AsyncSession,
 ) -> None:
     create = _ok("partners.create_request", request_id="r", number="C-1")
@@ -106,7 +108,9 @@ async def test_cleaning_success(
 
 
 async def test_moving_success(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
 ) -> None:
     create = _ok("partners.create_request", request_id="r", number="M-1")
     classify = _ok("partners.classify", number="M-1", category="MOVING")
@@ -120,7 +124,9 @@ async def test_moving_success(
 
 
 async def test_repair_success_with_dispatch(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
 ) -> None:
     create = _ok("partners.create_request", request_id="r", number="R-1")
     classify = _ok("partners.classify", number="R-1", category="REPAIR")
@@ -137,7 +143,9 @@ async def test_repair_success_with_dispatch(
 
 
 async def test_create_unavailable_degrades(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
     session: AsyncSession,
 ) -> None:
     _override(_down("partners.create_request"))
@@ -150,7 +158,9 @@ async def test_create_unavailable_degrades(
 
 
 async def test_classify_unavailable_still_succeeds(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
 ) -> None:
     create = _ok("partners.create_request", request_id="r", number="C-9")
     _override(create, _down("partners.classify"))
@@ -161,7 +171,9 @@ async def test_classify_unavailable_still_succeeds(
 
 
 async def test_decline_cancels(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
 ) -> None:
     create = _ok("partners.create_request", request_id="r")
     _override(create)
@@ -173,7 +185,9 @@ async def test_decline_cancels(
 
 
 async def test_unclear_reasks(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
 ) -> None:
     create = _ok("partners.create_request", request_id="r")
     _override(create)
@@ -188,7 +202,9 @@ async def test_unclear_reasks(
 
 
 async def test_money_signal_handoff(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
 ) -> None:
     create = _ok("partners.create_request", request_id="r")
     _override(create)
@@ -205,7 +221,9 @@ async def test_money_signal_handoff(
 
 @pytest.mark.parametrize("yes_text", ["да", "да!", "да.", "Да, оформляйте", "конечно, оформляйте"])
 async def test_confirmation_punctuation(
-    make_client: MakeClient, make_principal: MakePrincipal, seed_session: SeedSession,
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
     yes_text: str,
 ) -> None:
     create = _ok("partners.create_request", request_id="r", number="P")

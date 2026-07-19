@@ -102,9 +102,7 @@ async def test_status_query_partner_ref_returns_status() -> None:
 
 
 async def test_status_query_support_ref_returns_status() -> None:
-    tool = _NamedTool(
-        "support.get_status", ToolResult(data={"number": "S-7", "status": "OPEN"})
-    )
+    tool = _NamedTool("support.get_status", ToolResult(data={"number": "S-7", "status": "OPEN"}))
     out = await _loop(tool).run(
         decision=_status_decision(),
         intent=Intent.STATUS_QUERY,

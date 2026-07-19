@@ -54,6 +54,7 @@ class _FieldsData:
     city: _KeywordValues
     movers_packing: tuple[str, ...]
 
+
 # Лёгкое извлечение даты/времени (#2: меньше уточняющих вопросов). Консервативно —
 # только однозначные временные токены (иначе поле добирается вопросом): сегодня/завтра/
 # послезавтра, день недели, время ЧЧ:ММ, «N <месяца>», дата ДД.ММ(.ГГГГ). Логика (regex),
@@ -79,8 +80,7 @@ def _parse(data: Any) -> _FieldsData:
     categories: dict[str, tuple[FieldSpec, ...]] = {}
     for name, spec in data["categories"].items():
         fields = tuple(
-            FieldSpec(key=str(f["key"]), prompt=str(f["prompt"]))
-            for f in spec["required_fields"]
+            FieldSpec(key=str(f["key"]), prompt=str(f["prompt"])) for f in spec["required_fields"]
         )
         if not fields:
             raise ValueError(f"category {name} has no required_fields")
