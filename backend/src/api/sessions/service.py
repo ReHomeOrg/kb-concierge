@@ -265,8 +265,9 @@ class SessionService:
         )
         status = await status_reader.read(role, context)
         # Эмиссия в ledger (вариант A): известный статус + не-аноним. Режим ПУТИ (status
-        # None) и анонимы (нет стабильного ключа воронки) — не пишем.
-        if status is not None and session.user_id is not None:
+        # None), анонимы и пустой user_id (нет стабильного ключа воронки) — не пишем
+        # (truthy-guard ловит и None, и "" — псевдонимизация пустого ключа запрещена).
+        if status is not None and session.user_id:
             await outcome_recorder.record(role, session.user_id, status)
         return build_guide(role, status)
 

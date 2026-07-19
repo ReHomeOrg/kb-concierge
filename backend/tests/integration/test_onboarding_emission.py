@@ -8,6 +8,7 @@ GET онбординг-гида при ИЗВЕСТНОМ статусе + вк�
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
+from unittest.mock import AsyncMock
 
 import pytest
 from httpx import AsyncClient
@@ -145,6 +146,68 @@ async def test_ledger_disabled_emits_nothing(
     resp = await make_client(principal).get(f"{_BASE}/{sess.id}/onboarding?role=tenant")
     assert resp.status_code == 200
     assert await _record_for(session, uid) is None
+
+
+async def test_recorder_error_does_not_break_guide(
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # G6/FR-6.6: сбой записи в ledger НЕ роняет read-гид — ошибка глотается, GET = 200.
+    principal = make_principal(PrincipalKind.USER)
+    uid = str(principal.user_id)
+    sess = await seed_session(user_id=uid)
+    app.dependency_overrides[get_session_service] = lambda: _enabled_service(session)
+    app.dependency_overrides[get_onboarding_status_reader] = lambda: _StubReader({"account": True})
+    repo = LedgerRepository(session)
+    monkeypatch.setattr(repo, "record_progress", AsyncMock(side_effect=RuntimeError("boom")))
+    recorder = OnboardingOutcomeRecorder(repo, Settings(outcome_ledger_enabled=True))
+    app.dependency_overrides[get_onboarding_outcome_recorder] = lambda: recorder
+
+    resp = await make_client(principal).get(f"{_BASE}/{sess.id}/onboarding?role=tenant")
+    assert resp.status_code == 200  # гид отдан несмотря на сбой телеметрии
+    assert await _record_for(session, uid) is None  # запись не прошла
+
+
+async def test_repeat_get_is_forward_only_single_record(
+    make_client: MakeClient,
+    make_principal: MakePrincipal,
+    seed_session: SeedSession,
+    session: AsyncSession,
+) -> None:
+    # Повторный GID-GET с выросшим прогрессом → одна OPEN-запись, step_seq двигается вперёд.
+    principal = make_principal(PrincipalKind.USER)
+    uid = str(principal.user_id)
+    sess = await seed_session(user_id=uid)
+    app.dependency_overrides[get_session_service] = lambda: _enabled_service(session)
+    app.dependency_overrides[get_onboarding_outcome_recorder] = lambda: _ledger_recorder(session)
+    client = make_client(principal)
+
+    app.dependency_overrides[get_onboarding_status_reader] = lambda: _StubReader({"account": True})
+    r1 = await client.get(f"{_BASE}/{sess.id}/onboarding?role=tenant")
+    assert r1.status_code == 200  # T1 done → текущий T2
+
+    app.dependency_overrides[get_onboarding_status_reader] = lambda: _StubReader(
+        {"account": True, "profile_complete": True}
+    )
+    r2 = await client.get(f"{_BASE}/{sess.id}/onboarding?role=tenant")
+    assert r2.status_code == 200  # T1/T2 done → текущий T3
+
+    rows = (
+        (
+            await session.execute(
+                select(OutcomeRecord).where(
+                    OutcomeRecord.subject_key == pseudonymous_subject_key(uid)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1  # forward-only: одна OPEN-запись субъекта
+    assert rows[0].step_seq == 3 and rows[0].furthest_step == "T3"
 
 
 async def test_path_mode_emits_nothing(

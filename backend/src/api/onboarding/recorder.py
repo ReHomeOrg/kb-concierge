@@ -47,6 +47,10 @@ class OnboardingOutcomeRecorder:
         now = datetime.datetime.now(datetime.UTC)
         try:
             if outcome.complete:
+                # Терминал успеха. Позиция COMPLETED-записи = последний записанный прогресс
+                # (record_completion не двигает furthest_step/step_seq назад при step=None) —
+                # для аналитики важен факт завершения, не «последний шаг». Воронка drop-off
+                # смотрит OPEN/ABANDONED по шагам; COMPLETED считается как успех целиком.
                 await self._ledger.record_completion(
                     OutcomeKind.ONBOARDING,
                     subject_key,
