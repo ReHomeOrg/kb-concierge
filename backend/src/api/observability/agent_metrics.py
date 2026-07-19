@@ -55,6 +55,11 @@ AGENT_EMERGENCY = Counter(
     "Распознанные аварийные ситуации (плейбук): тип + режим партнёрской заявки",
     ["type", "partner_mode"],
 )
+AGENT_OUTCOMES = Counter(
+    "agent_outcomes_total",
+    "Терминальные исходы пути в outcome-ledger (L0 KPI-истина): воронка/drop-off",
+    ["kind", "result"],
+)
 
 
 def record_intent(intent: str, method: str) -> None:
@@ -97,3 +102,8 @@ def record_feedback(verdict: str) -> None:
 def record_emergency(type_: str, partner_mode: str) -> None:
     """Распознанная авария. Лейблы — только enum типа/режима (низкая кардинальность, G3)."""
     AGENT_EMERGENCY.labels(type=type_, partner_mode=partner_mode).inc()
+
+
+def record_outcome(kind: str, result: str) -> None:
+    """Терминальный исход пути. `kind`/`result` — enum-значения (низкая кардинальность, G3)."""
+    AGENT_OUTCOMES.labels(kind=kind, result=result).inc()

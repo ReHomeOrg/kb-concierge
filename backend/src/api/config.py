@@ -178,6 +178,15 @@ class Settings(BaseSettings):
     outbox_retry_base_seconds: float = Field(default=30.0, gt=0)
     outbox_visibility_timeout_seconds: float = Field(default=300.0, gt=0)
 
+    # --- Outcome-ledger (L0 KPI-истина: воронка/drop-off, §наблюдаемость). OFF по
+    # умолчанию → settle-воркер инертен, таблица дремлет. Своя БД слоя (арх-константа). ---
+    outcome_ledger_enabled: bool = Field(
+        default=False, description="Outcome-ledger + settle-воркер. OFF → ledger дремлет."
+    )
+    # Окно бездействия OPEN-записи до пометки ABANDONED (по умолчанию сутки).
+    outcome_settle_after_seconds: float = Field(default=86400.0, gt=0)
+    outcome_settle_batch_size: int = Field(default=100, ge=1, le=1000)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
