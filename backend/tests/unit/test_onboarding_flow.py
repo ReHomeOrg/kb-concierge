@@ -204,7 +204,7 @@ def test_parse_rejects_forward_or_unknown_requires() -> None:
 def test_load_flows_valid_override_applies(tmp_path: Path) -> None:
     import json
 
-    override = {
+    override: dict[str, object] = {
         "roles": {
             "tenant": {
                 "steps": [

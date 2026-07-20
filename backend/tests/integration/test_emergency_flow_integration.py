@@ -98,6 +98,7 @@ async def test_plumbing_emergency_mitigation(
     )
     assert "перекройте кран" in r.json()["content"].lower()  # немедленное действие
     await session.refresh(sess)
+    assert sess.flow_state is not None
     assert sess.flow_state["kind"] == "emergency"
     assert sess.flow_state["partner_mode"] == "CREATE"
 

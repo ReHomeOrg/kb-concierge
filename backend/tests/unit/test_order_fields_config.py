@@ -56,6 +56,6 @@ def test_broken_json_override_falls_back(tmp_path: Path) -> None:
 
 
 def test_empty_required_fields_override_falls_back(tmp_path: Path) -> None:
-    broken = {"categories": {"CLEANING": {"required_fields": []}}}
+    broken: dict[str, object] = {"categories": {"CLEANING": {"required_fields": []}}}
     data = load_fields(_write(tmp_path / "empty.json", broken))
     assert set(data.categories) == {"CLEANING", "MOVING", "REPAIR"}  # откат на встроенный

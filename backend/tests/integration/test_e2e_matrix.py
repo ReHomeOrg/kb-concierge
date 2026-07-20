@@ -69,7 +69,7 @@ def _override(*tools: _FakeTool) -> None:
     app.dependency_overrides[get_reasoning_loop] = lambda: ReasoningLoop(reg, Limits())
 
 
-async def _start(mp: MakePrincipal, ss: SeedSession, mc: MakeClient):
+async def _start(mp: MakePrincipal, ss: SeedSession, mc: MakeClient) -> tuple[Any, Any]:
     p = mp(PrincipalKind.USER)
     sess = await ss(user_id=str(p.user_id))
     return sess, mc(p)

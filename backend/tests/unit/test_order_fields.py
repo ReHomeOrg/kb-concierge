@@ -59,9 +59,9 @@ def test_build_fields_prompt_batches_all_missing() -> None:
     assert len(missing) == 3
     prompt = build_fields_prompt("CLEANING", missing)
     # Один текст, содержащий вопросы по всем недостающим полям.
-    assert prompt_for("CLEANING", "cleaning_type") in prompt
-    assert prompt_for("CLEANING", "area_or_rooms") in prompt
-    assert prompt_for("CLEANING", "datetime") in prompt
+    for _field in ("cleaning_type", "area_or_rooms", "datetime"):
+        _pf = prompt_for("CLEANING", _field)
+        assert _pf is not None and _pf in prompt
 
 
 def test_build_fields_prompt_single_missing_is_plain_question() -> None:

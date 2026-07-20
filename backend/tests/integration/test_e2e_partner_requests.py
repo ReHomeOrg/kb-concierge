@@ -79,7 +79,9 @@ async def _drive(client: AsyncClient, sid: Any, first: str, answers: list[str]) 
     return resp
 
 
-async def _start(make_principal: MakePrincipal, seed_session: SeedSession, make_client: MakeClient):
+async def _start(
+    make_principal: MakePrincipal, seed_session: SeedSession, make_client: MakeClient
+) -> tuple[Any, Any]:
     p = make_principal(PrincipalKind.USER)
     sess = await seed_session(user_id=str(p.user_id))
     return sess, make_client(p)
