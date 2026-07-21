@@ -61,9 +61,26 @@ class HttpKbTariffsClient:
         return _to_quote(payload)
 
 
+# Обязательные числовые/версионные ключи. Их отсутствие = битый контракт → деградация
+# (унавейл), а НЕ отдача пустых/«None»-строк: kb-tariffs — источник ЧИСЕЛ, где неполный
+# ответ хуже, чем «недоступно» (агент уточнит, а не процитирует пусто).
+_REQUIRED_KEYS = (
+    "tariff_version",
+    "commission_rate",
+    "commission_amount_rub",
+    "service_fee_rate",
+    "service_fee_amount_rub",
+    "lost_income_compensation_rub",
+    "insurance_coverage_rub",
+)
+
+
 def _to_quote(payload: Any) -> Quote:
-    """Маппинг QuoteResponse kb-tariffs → доменный DTO (числа как строки)."""
-    if not isinstance(payload, dict):
+    """Маппинг QuoteResponse kb-tariffs → доменный DTO (числа как строки).
+
+    Битое/неполное тело (не dict / нет обязательного числового ключа) → unavailable.
+    """
+    if not isinstance(payload, dict) or any(k not in payload for k in _REQUIRED_KEYS):
         return Quote(unavailable=True)
     sources = [
         TariffSource(title=str(s.get("title", "")), ref=str(s.get("ref", "")))
@@ -71,14 +88,17 @@ def _to_quote(payload: Any) -> Quote:
         if isinstance(s, dict)
     ]
     return Quote(
-        tariff_version=str(payload.get("tariff_version", "")),
+        tariff_version=str(payload["tariff_version"]),
         contract_year=int(payload.get("contract_year", 0) or 0),
         side=str(payload.get("side", "")),
-        commission_rate=str(payload.get("commission_rate", "")),
-        commission_amount_rub=str(payload.get("commission_amount_rub", "")),
-        service_fee_rate=str(payload.get("service_fee_rate", "")),
-        service_fee_amount_rub=str(payload.get("service_fee_amount_rub", "")),
-        lost_income_compensation_rub=str(payload.get("lost_income_compensation_rub", "")),
-        insurance_coverage_rub=str(payload.get("insurance_coverage_rub", "")),
+        commission_rate=str(payload["commission_rate"]),
+        commission_amount_rub=str(payload["commission_amount_rub"]),
+        commission_applies_to=str(payload.get("commission_applies_to", "")),
+        service_fee_rate=str(payload["service_fee_rate"]),
+        service_fee_amount_rub=str(payload["service_fee_amount_rub"]),
+        service_fee_applies_to=str(payload.get("service_fee_applies_to", "")),
+        lost_income_compensation_rub=str(payload["lost_income_compensation_rub"]),
+        lost_income_applies_to=str(payload.get("lost_income_applies_to", "")),
+        insurance_coverage_rub=str(payload["insurance_coverage_rub"]),
         sources=sources,
     )

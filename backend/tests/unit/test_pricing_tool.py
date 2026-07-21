@@ -33,9 +33,12 @@ def _quote() -> Quote:
         side="tenant",
         commission_rate="0.035",
         commission_amount_rub="3500",
+        commission_applies_to="both_sides",
         service_fee_rate="0.20",
         service_fee_amount_rub="20000",
+        service_fee_applies_to="tenant",
         lost_income_compensation_rub="150000",
+        lost_income_applies_to="tenant_pays_landlord_on_early_termination",
         insurance_coverage_rub="600000",
         sources=[TariffSource(title="Канон", ref="tariff:2026.1")],
     )
@@ -52,6 +55,8 @@ async def test_pricing_tool_maps_quote() -> None:
     )
     assert out.unavailable is False
     assert out.data["commission_amount_rub"] == "3500"
+    assert out.data["commission_applies_to"] == "both_sides"
+    assert out.data["service_fee_applies_to"] == "tenant"
     assert out.data["service_fee_amount_rub"] == "20000"
     assert out.data["insurance_coverage_rub"] == "600000"
     assert out.data["tariff_version"] == "2026.1"

@@ -47,9 +47,12 @@ _RESPONSE = {
     "side": "tenant",
     "commission_rate": "0.035",
     "commission_amount_rub": "3500",
+    "commission_applies_to": "both_sides",
     "service_fee_rate": "0.20",
     "service_fee_amount_rub": "20000",
+    "service_fee_applies_to": "tenant",
     "lost_income_compensation_rub": "150000",
+    "lost_income_applies_to": "tenant_pays_landlord_on_early_termination",
     "insurance_coverage_rub": "600000",
     "sources": [{"title": "Канон", "ref": "tariff:2026.1"}],
 }
@@ -76,8 +79,22 @@ async def test_quote_posts_body_and_maps() -> None:
     assert seen["auth"] == "Bearer t"  # m2m токен (без делегирования)
     assert quote.unavailable is False
     assert quote.commission_amount_rub == "3500"
+    assert quote.commission_applies_to == "both_sides"
+    assert quote.service_fee_applies_to == "tenant"
     assert quote.insurance_coverage_rub == "600000"
     assert quote.sources[0].ref == "tariff:2026.1"
+
+
+async def test_quote_degrades_on_missing_required_key() -> None:
+    # Битый/неполный контракт (нет обязательного числового ключа) → unavailable,
+    # а не пустая строка (kb-tariffs — источник чисел).
+    broken = {k: v for k, v in _RESPONSE.items() if k != "commission_amount_rub"}
+    client, http = _client(httpx.MockTransport(lambda r: httpx.Response(200, json=broken)))
+    async with http:
+        quote = await client.quote(
+            rent_amount_rub=Decimal("100000"), contract_year=1, side="tenant"
+        )
+    assert quote.unavailable is True
 
 
 async def test_quote_degrades_on_token_failure() -> None:

@@ -54,9 +54,12 @@ class PricingQuoteTool:
             "contract_year": result.contract_year,
             "commission_rate": result.commission_rate,
             "commission_amount_rub": result.commission_amount_rub,
+            "commission_applies_to": result.commission_applies_to,
             "service_fee_rate": result.service_fee_rate,
             "service_fee_amount_rub": result.service_fee_amount_rub,
+            "service_fee_applies_to": result.service_fee_applies_to,
             "lost_income_compensation_rub": result.lost_income_compensation_rub,
+            "lost_income_applies_to": result.lost_income_applies_to,
             "insurance_coverage_rub": result.insurance_coverage_rub,
             "sources": [{"title": s.title, "ref": s.ref} for s in result.sources],
         }
