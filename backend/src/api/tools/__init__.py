@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from api.tools.base import Tool, ToolContext, ToolResult
 from api.tools.platform import PlatformContextInput, PlatformGetContextTool
+from api.tools.pricing import PricingQuoteInput, PricingQuoteTool
 from api.tools.registry import ToolNotFoundError, ToolRegistry
 from api.tools.search import KbSearchInput, KbSearchTool
 
@@ -17,6 +18,8 @@ __all__ = [
     "KbSearchTool",
     "PlatformContextInput",
     "PlatformGetContextTool",
+    "PricingQuoteInput",
+    "PricingQuoteTool",
     "Tool",
     "ToolContext",
     "ToolNotFoundError",

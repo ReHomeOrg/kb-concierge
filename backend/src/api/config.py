@@ -115,6 +115,7 @@ class Settings(BaseSettings):
         default="kb-partners", description="aud для kb-partners."
     )
     oauth_audience_kb_search: str = Field(default="kb-search", description="aud для kb-search.")
+    oauth_audience_kb_tariffs: str = Field(default="kb-tariffs", description="aud для kb-tariffs.")
     oauth_audience_platform: str = Field(
         default="rehome-platform", description="aud для rehome-platform."
     )
@@ -137,6 +138,12 @@ class Settings(BaseSettings):
     # через OAuth2 по ADR). ПУСТОЙ base_url → инструмент инертен/деградирует. ---
     kb_search_api_base_url: str = Field(default="", description="Base URL kb-search (RAG).")
     kb_search_api_token: str = Field(default="", description="Fallback-токен kb-search (dev).")
+    # Инструмент pricing.quote — детерминированный расчёт тарифов (сосед kb-tariffs).
+    # ПУСТОЙ base_url → инструмент не регистрируется (инертен).
+    kb_tariffs_api_base_url: str = Field(
+        default="", description="Base URL kb-tariffs (расчёт канонических тарифов)."
+    )
+    kb_tariffs_api_token: str = Field(default="", description="Fallback-токен kb-tariffs (dev).")
     # K-4 #15: RAG-ответ (синтез) через chat-роут kb-search. ПО УМОЛЧАНИЮ ВЫКЛ — INFO_QA
     # отвечает детерминированно цитатами kb.search; включение даёт LLM-синтез (kb.answer).
     kb_rag_answer_enabled: bool = Field(

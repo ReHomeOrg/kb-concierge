@@ -22,6 +22,7 @@ from api.clients.partners.adapter import HttpKbPartnersClient
 from api.clients.platform.adapter import HttpPlatformClient
 from api.clients.search.adapter import HttpKbSearchClient
 from api.clients.support.adapter import HttpKbSupportClient
+from api.clients.tariffs.adapter import HttpKbTariffsClient
 from api.config import Settings, get_settings
 from api.reasoning.limits import Limits
 from api.reasoning.loop import ReasoningLoop
@@ -33,6 +34,7 @@ from api.tools.partners import (
     PartnersGetStatusTool,
 )
 from api.tools.platform import PlatformGetContextTool
+from api.tools.pricing import PricingQuoteTool
 from api.tools.registry import ToolRegistry
 from api.tools.search import KbSearchTool
 from api.tools.support import (
@@ -89,6 +91,29 @@ async def get_reasoning_loop() -> AsyncIterator[ReasoningLoop]:
                         )
                     )
                 )
+        if settings.kb_tariffs_api_base_url:
+            thttp = await stack.enter_async_context(
+                httpx.AsyncClient(
+                    base_url=settings.kb_tariffs_api_base_url,
+                    timeout=settings.client_timeout_seconds,
+                )
+            )
+            # pricing.quote — детерминированный read-only расчёт тарифов, m2m (числа не
+            # зависят от прав пользователя → без делегирования). Кеш: тариф стабилен.
+            registry.register(
+                PricingQuoteTool(
+                    HttpKbTariffsClient(
+                        http_client=build_resilient_client("kb_tariffs", thttp, settings),
+                        token_provider=build_token_provider(
+                            settings,
+                            fallback_token=settings.kb_tariffs_api_token,
+                            audience=settings.oauth_audience_kb_tariffs,
+                        ),
+                        cache=_TOOL_CACHE,
+                        cache_ttl_seconds=settings.client_cache_ttl_seconds,
+                    )
+                )
+            )
         if settings.platform_api_base_url:
             phttp = await stack.enter_async_context(
                 httpx.AsyncClient(
