@@ -147,6 +147,13 @@ class Settings(BaseSettings):
         description="Онбординг-гид (read-only поверхность next-step, GET .../onboarding). "
         "OFF по умолчанию; статус-чтение платформы — за CC-1/#16 (до него режим ПУТИ).",
     )
+    # Phase 1: боевое делегированное чтение статуса платформы (гид знает позицию «ты здесь»).
+    # OFF → NullStatusReader (режим ПУТИ). Требует platform_api_base_url. Read-only passthrough
+    # токена пользователя — CC-1 token-exchange НЕ требуется.
+    onboarding_platform_status_enabled: bool = Field(
+        default=False,
+        description="Читать статус онбординга у платформы (Phase 1). OFF → режим ПУТИ.",
+    )
     platform_api_base_url: str = Field(default="", description="Base URL rehome.one (контекст).")
     platform_api_token: str = Field(default="", description="Fallback-токен rehome.one (dev).")
     kb_support_api_base_url: str = Field(
