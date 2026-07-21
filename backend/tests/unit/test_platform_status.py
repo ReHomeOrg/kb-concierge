@@ -76,12 +76,21 @@ def test_map_bad_payload_returns_none() -> None:
     assert _map("owner", {"steps": "x"}) is None
 
 
+def test_platform_paths_have_trailing_slash() -> None:
+    # Реальные роуты платформы — `.../onboarding/status/` (со слэшем). Без него FastAPI
+    # отдаёт 307 → reader молча деградирует. Гард против регрессии контракта.
+    from api.onboarding.platform_status import _PATH_BY_ROLE
+
+    for role, path in _PATH_BY_ROLE.items():
+        assert path.endswith("/"), f"{role}: путь {path!r} должен заканчиваться на '/'"
+
+
 # --- read() over MockTransport ---------------------------------------------
 
 
 async def test_read_owner_maps() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/api/v1/landlord/onboarding/status"
+        assert request.url.path == "/api/v1/landlord/onboarding/status/"
         assert request.headers["authorization"] == "Bearer t"
         return httpx.Response(200, json=_OWNER_RESP)
 
@@ -91,7 +100,7 @@ async def test_read_owner_maps() -> None:
 
 async def test_read_tenant_path() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/api/v1/verification/onboarding/status"
+        assert request.url.path == "/api/v1/verification/onboarding/status/"
         return httpx.Response(200, json=_TENANT_RESP)
 
     out = await _reader(handler).read("tenant", ToolContext(on_behalf_of="u-1"))

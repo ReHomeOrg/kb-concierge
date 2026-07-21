@@ -28,10 +28,15 @@ from api.tools.base import ToolContext
 
 logger = logging.getLogger(__name__)
 
-# Статус-эндпоинт платформы по роли онбординга.
+# Статус-эндпоинт платформы по роли онбординга. Завершающий слэш ОБЯЗАТЕЛЕН: реальные
+# роуты платформы — `@router.get("/onboarding/status/")` (landlord на main; verification —
+# в открытом #36). Без слэша FastAPI отдаёт 307 → reader не увидит 200. Плюс на клиенте
+# включён follow_redirects как страховка.
+# ⚠️ tenant: эндпоинт создаётся в открытом PR #36 (verification). До его мержа+деплоя
+# tenant-запрос получает 404 → None → режим ПУТИ (грациозно; owner работает полноценно).
 _PATH_BY_ROLE = {
-    "owner": "/api/v1/landlord/onboarding/status",
-    "tenant": "/api/v1/verification/onboarding/status",
+    "owner": "/api/v1/landlord/onboarding/status/",
+    "tenant": "/api/v1/verification/onboarding/status/",
 }
 
 
@@ -61,7 +66,10 @@ class PlatformStatusReader:
             # применяет права ПОЛЬЗОВАТЕЛЯ (self-scoped), CC-1 не нужен. Сбой → деградация.
             token = await self._token.get_token(on_behalf_of=context.on_behalf_of)
             async with httpx.AsyncClient(
-                base_url=self._base_url, timeout=self._timeout, transport=self._transport
+                base_url=self._base_url,
+                timeout=self._timeout,
+                transport=self._transport,
+                follow_redirects=True,  # 307 от FastAPI trailing-slash → следуем (страховка)
             ) as http:
                 resp = await http.get(path, headers={"Authorization": f"Bearer {token}"})
             if resp.status_code != 200:
