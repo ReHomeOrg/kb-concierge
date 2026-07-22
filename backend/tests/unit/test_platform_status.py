@@ -1,4 +1,4 @@
-"""Юнит-тесты PlatformStatusReader: маппинг платформа→флаги flow + деградация (без сети)."""
+"""Юнит-тесты PlatformStatusReader (service-to-service): маппинг + запрос + деградация."""
 
 from __future__ import annotations
 
@@ -6,22 +6,8 @@ from typing import Any
 
 import httpx
 
-from api.onboarding.platform_status import PlatformStatusReader, _map
+from api.onboarding.platform_status import _STATUS_PATH, PlatformStatusReader, _map
 from api.tools.base import ToolContext
-
-
-class _StaticToken:
-    def __init__(self, token: str = "t") -> None:
-        self._token = token
-
-    async def get_token(self, on_behalf_of: str | None = None) -> str:
-        return self._token
-
-
-class _FailingToken:
-    async def get_token(self, on_behalf_of: str | None = None) -> str:
-        raise RuntimeError("keycloak down")
-
 
 _OWNER_RESP: dict[str, Any] = {
     "role": "landlord",
@@ -43,10 +29,10 @@ _TENANT_RESP: dict[str, Any] = {
 }
 
 
-def _reader(handler: Any, token: Any = None) -> PlatformStatusReader:
+def _reader(handler: Any) -> PlatformStatusReader:
     return PlatformStatusReader(
         base_url="http://platform",
-        token_provider=token or _StaticToken(),
+        service_key="svc-key",
         transport=httpx.MockTransport(handler),
     )
 
@@ -76,31 +62,33 @@ def test_map_bad_payload_returns_none() -> None:
     assert _map("owner", {"steps": "x"}) is None
 
 
-def test_platform_paths_have_trailing_slash() -> None:
-    # Реальные роуты платформы — `.../onboarding/status/` (со слэшем). Без него FastAPI
-    # отдаёт 307 → reader молча деградирует. Гард против регрессии контракта.
-    from api.onboarding.platform_status import _PATH_BY_ROLE
-
-    for role, path in _PATH_BY_ROLE.items():
-        assert path.endswith("/"), f"{role}: путь {path!r} должен заканчиваться на '/'"
+def test_status_path_has_trailing_slash() -> None:
+    # Реальный роут — `.../onboarding/status/` (со слэшем); без него FastAPI 307. Гард.
+    assert _STATUS_PATH.endswith("/")
 
 
 # --- read() over MockTransport ---------------------------------------------
 
 
-async def test_read_owner_maps() -> None:
+async def test_read_owner_sends_service_request_and_maps() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/api/v1/landlord/onboarding/status/"
-        assert request.headers["authorization"] == "Bearer t"
+        assert request.url.path == "/api/v1/internal/onboarding/status/"
+        assert request.headers["x-internal-service-key"] == "svc-key"
+        q = dict(request.url.params)
+        assert q["keycloak_sub"] == "u-1"
+        assert q["role"] == "owner"
+        assert q["email"] == "a@b.com"
         return httpx.Response(200, json=_OWNER_RESP)
 
-    out = await _reader(handler).read("owner", ToolContext(on_behalf_of="u-1"))
+    out = await _reader(handler).read("owner", ToolContext(on_behalf_of="u-1", email="a@b.com"))
     assert out == {"account": True, "kyc_passed": True, "object_added": False}
 
 
-async def test_read_tenant_path() -> None:
+async def test_read_tenant_without_email_omits_param() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/api/v1/verification/onboarding/status/"
+        assert request.url.path == "/api/v1/internal/onboarding/status/"
+        assert "email" not in dict(request.url.params)
+        assert dict(request.url.params)["role"] == "tenant"
         return httpx.Response(200, json=_TENANT_RESP)
 
     out = await _reader(handler).read("tenant", ToolContext(on_behalf_of="u-1"))
@@ -124,7 +112,8 @@ async def test_read_unknown_role_returns_none() -> None:
     assert out is None
 
 
-async def test_read_non_200_returns_none() -> None:
+async def test_read_404_not_linked_returns_none() -> None:
+    # rehome.one не нашёл/не связал юзера → 404 → режим ПУТИ.
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404)
 
@@ -132,11 +121,9 @@ async def test_read_non_200_returns_none() -> None:
     assert out is None
 
 
-async def test_read_token_failure_returns_none() -> None:
+async def test_read_transport_error_returns_none() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_OWNER_RESP)
+        raise httpx.ConnectError("down")
 
-    out = await _reader(handler, token=_FailingToken()).read(
-        "owner", ToolContext(on_behalf_of="u-1")
-    )
+    out = await _reader(handler).read("owner", ToolContext(on_behalf_of="u-1"))
     assert out is None

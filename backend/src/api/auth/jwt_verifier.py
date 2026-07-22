@@ -5,7 +5,8 @@
 - `sub` → user_id (UUID);
 - `kbc_kind` (user/operator/service/agent, default user) → kind;
 - `kbc_act_sub` (UUID) → on_behalf_of (делегированная авторизация агента, G7/FR-9.7);
-- `scope` (OAuth, space-separated) → scopes.
+- `scope` (OAuth, space-separated) → scopes;
+- `email` (ТОЛЬКО при `email_verified=true`) → email (мост личности с rehome.one).
 """
 
 from __future__ import annotations
@@ -44,11 +45,21 @@ def claims_to_principal(claims: dict[str, Any]) -> Principal:
     except (KeyError, ValueError) as exc:
         raise ProblemException.unauthorized(detail="Token sub is not a valid uuid") from exc
     scopes = frozenset(str(claims.get("scope", "")).split())
+    # Мост личности с rehome.one держится на email (auto-link Keycloak sub↔Django-юзер).
+    # Форвардим email ТОЛЬКО при `email_verified=true`: неподтверждённый адрес мог бы
+    # привязать чужой аккаунт. Нет клейма / false → email=None → гид в режим ПУТИ
+    # (безопасная деградация; платформа дополнительно проверяет свой is_email_verified).
+    email = (
+        str(claims["email"])
+        if claims.get("email") and claims.get("email_verified") is True
+        else None
+    )
     return Principal(
         user_id=user_id,
         kind=_parse_kind(claims.get("kbc_kind")),
         scopes=scopes,
         on_behalf_of=_parse_act_sub(claims.get("kbc_act_sub")),
+        email=email,
     )
 
 

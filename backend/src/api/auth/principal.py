@@ -44,6 +44,9 @@ class Principal:
     kind: PrincipalKind
     scopes: frozenset[str] = field(default_factory=frozenset)
     on_behalf_of: uuid.UUID | None = None
+    # email из проверенного токена — мост личности с rehome.one (service-to-service
+    # онбординг-статус: rehome.one линкует Keycloak sub↔Django-юзера по email). Не ПДн-лог.
+    email: str | None = None
 
     @property
     def is_operator(self) -> bool:
