@@ -147,15 +147,20 @@ class Settings(BaseSettings):
         description="Онбординг-гид (read-only поверхность next-step, GET .../onboarding). "
         "OFF по умолчанию; статус-чтение платформы — за CC-1/#16 (до него режим ПУТИ).",
     )
-    # Phase 1: боевое делегированное чтение статуса платформы (гид знает позицию «ты здесь»).
-    # OFF → NullStatusReader (режим ПУТИ). Требует platform_api_base_url. Read-only passthrough
-    # токена пользователя — CC-1 token-exchange НЕ требуется.
+    # Phase 1: боевое чтение статуса онбординга у rehome.one (гид знает позицию «ты здесь»).
+    # OFF → NullStatusReader (режим ПУТИ). Требует platform_api_base_url + platform_service_key.
+    # rehome.one на своей Django-auth (не Keycloak) → service-to-service (не passthrough).
     onboarding_platform_status_enabled: bool = Field(
         default=False,
-        description="Читать статус онбординга у платформы (Phase 1). OFF → режим ПУТИ.",
+        description="Читать статус онбординга у rehome.one (Phase 1). OFF → режим ПУТИ.",
     )
     platform_api_base_url: str = Field(default="", description="Base URL rehome.one (контекст).")
     platform_api_token: str = Field(default="", description="Fallback-токен rehome.one (dev).")
+    # Сервис-ключ для доверенного m2m internal-эндпоинта rehome.one (X-Internal-Service-Key).
+    # Общий с rehome.one (kb-vault). ПУСТО → Phase 1 не активируется (режим ПУТИ).
+    platform_service_key: str = Field(
+        default="", description="Shared service-key к internal-эндпоинтам rehome.one (kb-vault)."
+    )
     kb_support_api_base_url: str = Field(
         default="", description="Base URL kb-support (эскалация/тикеты)."
     )

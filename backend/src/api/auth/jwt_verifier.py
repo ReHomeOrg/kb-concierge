@@ -44,11 +44,13 @@ def claims_to_principal(claims: dict[str, Any]) -> Principal:
     except (KeyError, ValueError) as exc:
         raise ProblemException.unauthorized(detail="Token sub is not a valid uuid") from exc
     scopes = frozenset(str(claims.get("scope", "")).split())
+    email = str(claims["email"]) if claims.get("email") else None
     return Principal(
         user_id=user_id,
         kind=_parse_kind(claims.get("kbc_kind")),
         scopes=scopes,
         on_behalf_of=_parse_act_sub(claims.get("kbc_act_sub")),
+        email=email,
     )
 
 

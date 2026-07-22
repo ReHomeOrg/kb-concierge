@@ -11,7 +11,6 @@ from functools import lru_cache
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.clients.auth import DelegatedUserTokenProvider, build_token_provider
 from api.config import get_settings
 from api.db import get_session
 from api.intent.service import IntentService, build_intent_classifier
@@ -62,21 +61,19 @@ def get_rate_limiter() -> RateLimiter:
 
 def get_onboarding_status_reader() -> OnboardingStatusReader:
     """Reader статуса онбординга. Config-gated: при `onboarding_platform_status_enabled`
-    + `platform_api_base_url` — боевой `PlatformStatusReader` (делегированное self-scoped
-    чтение платформы, Phase 1); иначе `NullStatusReader` (режим ПУТИ, Phase 0). Read-only
-    passthrough токена пользователя — CC-1 не требуется. Тесты переопределяют через
+    + `platform_api_base_url` + `platform_service_key` — боевой `PlatformStatusReader`
+    (service-to-service чтение internal-эндпоинта rehome.one, Phase 1); иначе
+    `NullStatusReader` (режим ПУТИ, Phase 0). Тесты переопределяют через
     `app.dependency_overrides`."""
     settings = get_settings()
-    if settings.onboarding_platform_status_enabled and settings.platform_api_base_url:
+    if (
+        settings.onboarding_platform_status_enabled
+        and settings.platform_api_base_url
+        and settings.platform_service_key
+    ):
         return PlatformStatusReader(
             base_url=settings.platform_api_base_url,
-            token_provider=DelegatedUserTokenProvider(
-                build_token_provider(
-                    settings,
-                    fallback_token=settings.platform_api_token,
-                    audience=settings.oauth_audience_platform,
-                )
-            ),
+            service_key=settings.platform_service_key,
             timeout=settings.client_timeout_seconds,
         )
     return NullStatusReader()

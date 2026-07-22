@@ -16,11 +16,14 @@ from typing import Any, Protocol, runtime_checkable
 class ToolContext:
     """Контекст вызова инструмента. `on_behalf_of` — делегирование прав пользователя
     (G7); `correlation_id` — сквозная трасса (NFR-13); `session_id` — идентификатор
-    диалоговой сессии для идемпотентного приёма write-инструментами (FR-6.4)."""
+    диалоговой сессии для идемпотентного приёма write-инструментами (FR-6.4); `email` —
+    email пользователя из проверенного токена (мост личности с rehome.one, service-to-
+    service онбординг-статуса; не логируется)."""
 
     on_behalf_of: str | None = None
     correlation_id: str | None = None
     session_id: str | None = None
+    email: str | None = None
 
 
 @dataclass(frozen=True)

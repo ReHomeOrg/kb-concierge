@@ -262,6 +262,9 @@ class SessionService:
             on_behalf_of=session.user_id,
             correlation_id=session.correlation_id,
             session_id=str(session.id),
+            # email владельца (=principal, доступ уже проверен) — мост личности с rehome.one
+            # для service-to-service резолва (auto-link Keycloak sub↔Django-юзер по email).
+            email=principal.email,
         )
         status = await status_reader.read(role, context)
         # Эмиссия в ledger (вариант A): известный статус + не-аноним. Режим ПУТИ (status

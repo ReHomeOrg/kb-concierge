@@ -1,18 +1,18 @@
-"""Боевой reader статуса онбординга: делегированное self-scoped чтение платформы (Phase 1).
+"""Боевой reader статуса онбординга через доверенный m2m internal-эндпоинт rehome.one (Phase 1).
 
-После `NullStatusReader` (режим ПУТИ) — гид узнаёт РЕАЛЬНУЮ позицию пользователя, читая
-статус-эндпоинты платформы ОТ ИМЕНИ пользователя (G7). Read-only → делегирование через
-passthrough пользовательского токена (`DelegatedUserTokenProvider`), CC-1 token-exchange
-НЕ требуется.
+Концьерж (Keycloak-RS256) и rehome.one (своя Django-авторизация, HS256) — РАЗДЕЛЬНЫЕ системы
+личности; passthrough Keycloak-токена rehome.one отвергает (проверено smoke-тестом). Поэтому
+**service-to-service**: концьерж зовёт internal-эндпоинт rehome.one сервис-ключом
+(`X-Internal-Service-Key`), передавая `keycloak_sub` (=on_behalf_of) и `email`; rehome.one
+резолвит своего юзера (по keycloak_sub, при первом обращении auto-link по email) и отдаёт статус.
 
-Контракт платформы (#16):
-  GET /api/v1/landlord/onboarding/status      (owner)
-  GET /api/v1/verification/onboarding/status  (tenant)
-  → {role, steps:[{key,done}], current_step, complete, ...}; key ∈ profile|phone|kyc|property
+Контракт (internal, под сервис-ключом):
+  GET /api/v1/internal/onboarding/status/?keycloak_sub&role=owner|tenant&email
+  → тот же {role, steps:[{key,done}], ...}; key ∈ profile|phone|kyc|property
 
-Маппинг платформенных шагов → `done_flag`-ов автомата (`flow_data.json`). Любой сбой/
-недоступность/не-200 → `None` (деградация FR-6.6): гид падает в режим ПУТИ, не роняется и
-не врёт о прогрессе. Без ПДн (читаем только булевы флаги завершённости).
+Маппинг шагов → `done_flag`-ов автомата (`flow_data.json`, `_map`). Любой сбой/не-200/404-нет-
+связки → `None` (деградация FR-6.6): гид в режим ПУТИ, не роняется и не врёт. Без ПДн в логах
+(email/sub не логируем).
 """
 
 from __future__ import annotations
@@ -23,59 +23,55 @@ from typing import Any
 
 import httpx
 
-from api.clients.auth import TokenProvider
 from api.tools.base import ToolContext
 
 logger = logging.getLogger(__name__)
 
-# Статус-эндпоинт платформы по роли онбординга. Завершающий слэш ОБЯЗАТЕЛЕН: реальные
-# роуты платформы — `@router.get("/onboarding/status/")` (landlord на main; verification —
-# в открытом #36). Без слэша FastAPI отдаёт 307 → reader не увидит 200. Плюс на клиенте
-# включён follow_redirects как страховка.
-# ⚠️ tenant: эндпоинт создаётся в открытом PR #36 (verification). До его мержа+деплоя
-# tenant-запрос получает 404 → None → режим ПУТИ (грациозно; owner работает полноценно).
-_PATH_BY_ROLE = {
-    "owner": "/api/v1/landlord/onboarding/status/",
-    "tenant": "/api/v1/verification/onboarding/status/",
-}
+# Internal m2m-эндпоинт rehome.one (единый для обеих ролей; роль — query-параметром).
+# Завершающий слэш — реальный роут; follow_redirects как страховка от 307.
+_STATUS_PATH = "/api/v1/internal/onboarding/status/"
+_SERVICE_KEY_HEADER = "X-Internal-Service-Key"
 
 
 class PlatformStatusReader:
-    """Читает статус онбординга у платформы делегированно (self-scoped) и маппит в флаги."""
+    """Читает статус онбординга у rehome.one через доверенный m2m internal-эндпоинт."""
 
     def __init__(
         self,
         *,
         base_url: str,
-        token_provider: TokenProvider,
+        service_key: str,
         timeout: float = 5.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._base_url = base_url
-        self._token = token_provider
+        self._service_key = service_key
         self._timeout = timeout
         # transport — тест-seam (httpx.MockTransport); в проде None (реальная сеть).
         self._transport = transport
 
     async def read(self, role: str, context: ToolContext) -> Mapping[str, bool] | None:
-        path = _PATH_BY_ROLE.get(role)
-        if path is None or not context.on_behalf_of:
+        if role not in ("owner", "tenant") or not context.on_behalf_of:
             return None
+        params: dict[str, str] = {"keycloak_sub": str(context.on_behalf_of), "role": role}
+        if context.email:
+            params["email"] = context.email  # первичная связка личности (auto-link)
         try:
-            # Делегирование в самом токене (passthrough токена пользователя) — платформа
-            # применяет права ПОЛЬЗОВАТЕЛЯ (self-scoped), CC-1 не нужен. Сбой → деградация.
-            token = await self._token.get_token(on_behalf_of=context.on_behalf_of)
             async with httpx.AsyncClient(
                 base_url=self._base_url,
                 timeout=self._timeout,
                 transport=self._transport,
                 follow_redirects=True,  # 307 от FastAPI trailing-slash → следуем (страховка)
             ) as http:
-                resp = await http.get(path, headers={"Authorization": f"Bearer {token}"})
+                resp = await http.get(
+                    _STATUS_PATH,
+                    params=params,
+                    headers={_SERVICE_KEY_HEADER: self._service_key},
+                )
             if resp.status_code != 200:
                 return None
             payload = resp.json()
-        except Exception:  # noqa: BLE001 — любая ошибка чтения → режим ПУТИ (FR-6.6)
+        except Exception:  # noqa: BLE001 — любая ошибка → режим ПУТИ (FR-6.6)
             logger.warning("onboarding.platform_status.unavailable", extra={"role": role})
             return None
         return _map(role, payload)
