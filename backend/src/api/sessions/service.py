@@ -264,6 +264,11 @@ class SessionService:
             session_id=str(session.id),
             # email владельца (=principal, доступ уже проверен) — мост личности с rehome.one
             # для service-to-service резолва (auto-link Keycloak sub↔Django-юзер по email).
+            # NB: сейчас эндпоинт под прямым user-токеном (sub субъекта == session.user_id,
+            # email того же лица). Если сюда попадёт АГЕНТ-токен (kbc_act_sub задан), email
+            # будет агента, а keycloak_sub — конечного юзера → рассинхрон; тогда брать email
+            # из делегированного контекста. Платформа резолвит по keycloak_sub первым →
+            # email лишь для первичного auto-link, так что риск ограничен.
             email=principal.email,
         )
         status = await status_reader.read(role, context)
