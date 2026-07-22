@@ -262,14 +262,13 @@ class SessionService:
             on_behalf_of=session.user_id,
             correlation_id=session.correlation_id,
             session_id=str(session.id),
-            # email владельца (=principal, доступ уже проверен) — мост личности с rehome.one
-            # для service-to-service резолва (auto-link Keycloak sub↔Django-юзер по email).
-            # NB: сейчас эндпоинт под прямым user-токеном (sub субъекта == session.user_id,
-            # email того же лица). Если сюда попадёт АГЕНТ-токен (kbc_act_sub задан), email
-            # будет агента, а keycloak_sub — конечного юзера → рассинхрон; тогда брать email
-            # из делегированного контекста. Платформа резолвит по keycloak_sub первым →
-            # email лишь для первичного auto-link, так что риск ограничен.
-            email=principal.email,
+            # email — мост личности с rehome.one (auto-link Keycloak sub↔Django-юзер).
+            # Токен несёт email ВЫЗЫВАЮЩЕГО, а keycloak_sub=session.user_id — СУБЪЕКТА;
+            # при делегации (агент-токен с kbc_act_sub / оператор) они расходятся, и email
+            # агента привязал бы НЕ тот аккаунт. Поэтому форвардим email ТОЛЬКО когда
+            # вызывающий = субъект (прямой user-токен). Платформа резолвит по keycloak_sub
+            # первым, email — лишь для первичного auto-link, так что риск и без того ограничен.
+            email=(principal.email if session.user_id == str(principal.user_id) else None),
         )
         status = await status_reader.read(role, context)
         # Эмиссия в ledger (вариант A): известный статус + не-аноним. Режим ПУТИ (status

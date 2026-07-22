@@ -69,6 +69,12 @@ class PlatformStatusReader:
                     headers={_SERVICE_KEY_HEADER: self._service_key},
                 )
             if resp.status_code != 200:
+                # status_code — не ПДн; логируем для диагностики (401=сервис-ключ,
+                # 404=нет связки, 5xx=платформа). Тело/идентификаторы не логируем.
+                logger.warning(
+                    "onboarding.platform_status.non_200",
+                    extra={"role": role, "status_code": resp.status_code},
+                )
                 return None
             payload = resp.json()
         except Exception:  # noqa: BLE001 — любая ошибка → режим ПУТИ (FR-6.6)
