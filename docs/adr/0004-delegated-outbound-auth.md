@@ -51,8 +51,8 @@ m2m-токен при неудаче обмена НЕТ**: иначе аген�
 - Включение боевого режима — конфигурацией (`KBC_OAUTH_*` + креды kb-vault); код готов,
   тесты — на `httpx.MockTransport` (без сети). Живая проверка — при наличии Keycloak-realm
   и кредов (ops, как YandexGPT ADR-0003).
-- **Realm-конфиг — зона ops:** имена actor-claim (`kbp_act_sub` и аналоги), аудитория токена
-  per-downstream и политики token-exchange настраиваются в Keycloak. ~~Per-audience scoping
+- **Realm-конфиг — зона ops:** имя actor-claim (канон `act.sub`, см. Дополнение 2026-07-24),
+  аудитория токена per-downstream и политики token-exchange настраиваются в Keycloak. ~~Per-audience scoping
   (`audience` в exchange) — следующий шаг при провижининге realm, на контракт кода не влияет.~~
   → *см. Дополнение (2026-07-16): per-audience ПОТРЕБОВАЛ правки кода.*
 - Закрывает CC-1 у partners/support/search (issue #12). rehome.one — после получения
@@ -81,4 +81,28 @@ audience задаётся per-downstream в точках сборки прова
 Остаётся зоной ops (без влияния на код): аудитория-мапперы соседей + **token-exchange
 permission на каждый aud** — должны настраиваться **синхронно** с боевым включением, иначе
 Keycloak вернёт 400 на обмене → деградация в `unavailable` (fail-closed). Имя actor-claim
-(`kbp_act_sub` vs стандарт RFC 8693 `act.sub`) — открытый кросс-командный вопрос.
+— **решено**, см. Дополнение (2026-07-24).
+
+## Дополнение (2026-07-24) — канон actor-claim зафиксирован (решение Архитектора)
+
+Открытый кросс-командный вопрос «`kbp_act_sub` vs стандарт RFC 8693» **закрыт**. Решение
+Архитектора (Evgeniy) — [kb-concierge#12](https://github.com/ReHomeOrg/kb-concierge/issues/12#issuecomment-5068920416):
+
+**Канон делегирования — строго RFC 8693, без кастомных claim'ов:**
+- **`sub`** = **пользователь**, от чьего имени действует агент → соседи проверяют права
+  (scope/access_level, 404 на чужой ресурс) **по `sub`** (G2/G7);
+- **`act.sub`** = **агент-инициатор** (Консьерж, actor) → только для аудита/трассы
+  «кто инициировал» (§ доменный ориентир 6: `actor_id` = SP агента, on-behalf-of
+  атрибутируется пользователю).
+
+Следствия:
+- **Консьерж — правок не требует:** `TokenExchangeProvider` уже шлёт стандартный
+  `requested_subject = <sub пользователя>`; Keycloak даёт ровно эту раскладку из коробки.
+- **kb-partners:** кастом `kbp_act_sub` **депрекируется** — временно двойное чтение
+  (`act.sub` → фолбэк `kbp_act_sub`), после миграции кастом убрать.
+- **kb-support / kb-search** ([#13](https://github.com/ReHomeOrg/kb-concierge/issues/13),
+  [#14](https://github.com/ReHomeOrg/kb-concierge/issues/14)): читают стандартный `act`/`sub`,
+  нового кастома не вводят.
+
+Остаётся зоной ops: включить в Keycloak token-exchange (impersonation) для клиента агента
++ audience-мапперы per-downstream; затем живая E2E-проверка G2/G7 на dev.rehome.one.
