@@ -5,9 +5,20 @@ from __future__ import annotations
 from api.policy.signals import extract_signals
 
 
-def test_money_signal() -> None:
-    assert extract_signals("верните деньги за заказ").money is True
+def test_money_action_signal() -> None:
+    s = extract_signals("верните деньги за заказ")
+    assert s.money_action is True
+    assert s.money is True  # свойство-дизъюнкция
     assert extract_signals("какая погода").money is False
+
+
+def test_money_topic_vs_action() -> None:
+    # #51: «комиссия» — ТЕМА (не действие); «оплатить» — ДЕЙСТВИЕ.
+    topic = extract_signals("какая у вас комиссия")
+    assert topic.money_topic is True
+    assert topic.money_action is False
+    action = extract_signals("хочу оплатить комиссию")
+    assert action.money_action is True
 
 
 def test_claim_signal() -> None:

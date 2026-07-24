@@ -62,12 +62,30 @@ def test_support_issue_with_claim_handoff() -> None:
     assert d.reason is DecisionReason.MANDATORY_HANDOFF_CLAIM
 
 
-def test_money_is_never_autonomous() -> None:
-    # G1: деньги → handoff независимо от намерения/уверенности.
+def test_money_action_is_never_autonomous() -> None:
+    # G1: денежное ДЕЙСТВИЕ (транзакция) → handoff независимо от намерения/уверенности.
     for intent in (Intent.PARTNER_SERVICE, Intent.SUPPORT_ISSUE, Intent.INFO_QA):
-        d = _engine().decide(intent, 0.99, TurnSignals(money=True))
+        d = _engine().decide(intent, 0.99, TurnSignals(money_action=True))
         assert d.outcome is AgentActionKind.HANDOFF
         assert d.reason is DecisionReason.MONEY_NEVER_AUTONOMOUS
+
+
+def test_money_topic_handoff_except_pricing() -> None:
+    # Денежная ТЕМА (комиссия/депозит): HANDOFF для обычных интентов…
+    d = _engine().decide(Intent.INFO_QA, 0.99, TurnSignals(money_topic=True))
+    assert d.outcome is AgentActionKind.HANDOFF
+    assert d.reason is DecisionReason.MONEY_NEVER_AUTONOMOUS
+    # …но ПОД PRICING_QUERY тема разрешена (read-only pricing.quote, #51).
+    p = _engine().decide(Intent.PRICING_QUERY, 0.99, TurnSignals(money_topic=True))
+    assert p.outcome is AgentActionKind.ANSWER
+    assert p.allowed_tools == ("pricing.quote",)
+
+
+def test_money_action_beats_pricing_exemption() -> None:
+    # Транзакционный глагол под PRICING_QUERY всё равно → HANDOFF (G1 не ослаблен).
+    d = _engine().decide(Intent.PRICING_QUERY, 0.99, TurnSignals(money_action=True))
+    assert d.outcome is AgentActionKind.HANDOFF
+    assert d.reason is DecisionReason.MONEY_NEVER_AUTONOMOUS
 
 
 def test_irreversible_handoff() -> None:

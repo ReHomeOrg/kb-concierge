@@ -70,7 +70,9 @@ def enforce_decision(decision: PolicyDecision, signals: TurnSignals) -> PolicyDe
     матрицей из БД (M4.3); этот инвариант держится независимо.
     """
     is_autonomous = decision.outcome in (AgentActionKind.ANSWER, AgentActionKind.TOOL_CALL)
-    if is_autonomous and signals.money:
+    # Вето ключится на денежное ДЕЙСТВИЕ (транзакция), не на тему (#51): read-only цитата
+    # тарифа (комиссия/депозит как ТЕМА) деньги не двигает и разрешена под PRICING_QUERY.
+    if is_autonomous and signals.money_action:
         return PolicyDecision(
             AgentActionKind.HANDOFF,
             DecisionReason.MONEY_NEVER_AUTONOMOUS,

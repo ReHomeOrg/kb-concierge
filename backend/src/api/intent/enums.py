@@ -16,7 +16,9 @@ class Intent(str, enum.Enum):
     INFO_QA — информация/вопрос-ответ (→ KB/RAG). PARTNER_SERVICE — заявка на
     партнёрскую услугу (→ kb-partners). SUPPORT_ISSUE — проблема/жалоба/претензия
     (→ kb-support). STATUS_QUERY — вопрос о статусе своей заявки/обращения (read-only,
-    → get_status). NON_STANDARD — нестандартная ситуация (→ эскалация по умолчанию).
+    → get_status). PRICING_QUERY — вопрос о канонических тарифах (комиссия/сбор/
+    компенсация/страховка), read-only → детерминированный `pricing.quote`.
+    NON_STANDARD — нестандартная ситуация (→ эскалация по умолчанию).
     SMALL_TALK — приветствие/благодарность. OUT_OF_SCOPE — вне области экосистемы.
     """
 
@@ -24,6 +26,7 @@ class Intent(str, enum.Enum):
     PARTNER_SERVICE = "PARTNER_SERVICE"
     SUPPORT_ISSUE = "SUPPORT_ISSUE"
     STATUS_QUERY = "STATUS_QUERY"
+    PRICING_QUERY = "PRICING_QUERY"
     EMERGENCY = "EMERGENCY"
     NON_STANDARD = "NON_STANDARD"
     SMALL_TALK = "SMALL_TALK"

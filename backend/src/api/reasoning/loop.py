@@ -12,7 +12,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from api.intent.engine import CAPABILITIES_KEYWORDS, PARTNER_SERVICE_KEYWORDS
+from api.intent.engine import (
+    CAPABILITIES_KEYWORDS,
+    PARTNER_SERVICE_KEYWORDS,
+    extract_pricing_slots,
+)
 from api.intent.enums import Intent
 from api.policy.engine import PolicyDecision
 from api.policy.enums import AgentActionKind
@@ -49,6 +53,7 @@ _PARTNERS_ESTIMATE = "partners.estimate"
 _SUPPORT_CREATE = "support.create_ticket"
 _SUPPORT_ADD_MESSAGE = "support.add_message"
 _SUPPORT_GET_STATUS = "support.get_status"
+_PRICING_QUOTE = "pricing.quote"
 
 # Мост «инфо→действие» (#11): предложить оформить заявку после ответа из базы знаний.
 _INFO_ACTION_OFFER = " Если нужно — могу оформить заявку на услугу."
@@ -70,6 +75,21 @@ _STATUS_UNAVAILABLE_REPLY = (
     "Попробуйте чуть позже или я передам вопрос специалисту."
 )
 _PLATFORM_GET_CONTEXT = "platform.get_context"
+
+# Тарифный вопрос (#51): не хватает суммы аренды и/или стороны — уточняем одним шагом.
+# Сторону СПРАШИВАЕМ ВСЕГДА (решение Архитектора: не инферим), сумму — если не извлекли.
+_PRICING_CLARIFY_REPLY = (
+    "Посчитаю тарифы по вашему договору. Уточните, пожалуйста, ежемесячный арендный "
+    "платёж (в ₽) и кто вы в сделке — арендатор или арендодатель."
+)
+_PRICING_SIDE_OPTIONS: list[dict[str, str]] = [
+    {"id": "tenant", "label": "Я арендатор"},
+    {"id": "landlord", "label": "Я арендодатель"},
+]
+_PRICING_UNAVAILABLE_REPLY = (
+    "Не получилось рассчитать тариф прямо сейчас — сервис расчёта временно недоступен. "
+    "Попробуйте чуть позже или я передам вопрос специалисту."
+)
 
 # FR-7.4: предложение платного/необратимого действия + запрос явного согласия (из конфига).
 _PROPOSE_PARTNER_REPLY = REPLIES["propose_partner"]
@@ -170,6 +190,9 @@ class ReasoningLoop:
         if intent is Intent.STATUS_QUERY:
             # Read-only статус последней заявки сессии (#4); ссылки даёт сервис.
             return await self._run_status_query(decision, context, status_refs or {})
+        if intent is Intent.PRICING_QUERY and _PRICING_QUOTE in decision.allowed_tools:
+            # Read-only детерминированный расчёт тарифа (#51): дословная цитата чисел.
+            return await self._answer_from_pricing(query_masked, context)
         if intent is Intent.INFO_QA and _KB_SEARCH in decision.allowed_tools:
             # K-4 #15: RAG-синтез (kb.answer) при включении и наличии инструмента;
             # иначе — детерминированные цитаты kb.search (поведение M5).
@@ -504,6 +527,87 @@ class ReasoningLoop:
             citations=citations,
             options=options,
         )
+
+    async def _answer_from_pricing(self, query_masked: str, context: ToolContext) -> LoopResult:
+        """Детерминированный тариф (#51): собрать слоты → pricing.quote → дословная цитата.
+
+        `side` обязателен и НЕ инферится по умолчанию (решение Архитектора: сторона всегда
+        уточняется явно). Нет стороны/суммы → один CLARIFY с тапаемыми вариантами (без FSM).
+        `contract_year` по умолчанию 1 (с оговоркой в ответе). Деградация (недоступность/
+        битый ответ) → уточнение, число НЕ выдумываем (FR-6.6, денежный контур).
+        """
+        slots = extract_pricing_slots(query_masked)
+        rent = slots.get("rent_amount_rub")
+        side = slots.get("side")
+        if rent is None or side is None:
+            # Не хватает суммы и/или стороны → один уточняющий шаг (сторона — всегда).
+            return LoopResult(reply=_PRICING_CLARIFY_REPLY, options=list(_PRICING_SIDE_OPTIONS))
+        if self._limits.max_tool_calls < 1:
+            return LoopResult(reply=_PRICING_UNAVAILABLE_REPLY, steps=1, degraded=True)
+        year_slot = slots.get("contract_year")
+        contract_year = int(year_slot) if year_slot is not None else 1
+        payload = {"rent_amount_rub": str(rent), "contract_year": contract_year, "side": side}
+        try:
+            result = await self._registry.call(_PRICING_QUOTE, payload, context)
+        except Exception:
+            obs = Observation(
+                tool=_PRICING_QUOTE, unavailable=True, summary=wrap_untrusted("error")
+            )
+            return LoopResult(
+                reply=_PRICING_UNAVAILABLE_REPLY,
+                observations=[obs],
+                tool_calls=1,
+                steps=2,
+                degraded=True,
+            )
+        summary = wrap_untrusted(f"pricing.quote: {'unavailable' if result.unavailable else 'ok'}")
+        obs = Observation(tool=_PRICING_QUOTE, unavailable=result.unavailable, summary=summary)
+        # Битый/неполный тариф соседа → деградация (не цитируем пустое, FR-6.5/6.6).
+        if result.unavailable or not result.data.get("tariff_version"):
+            return LoopResult(
+                reply=_PRICING_UNAVAILABLE_REPLY,
+                observations=[obs],
+                tool_calls=1,
+                steps=2,
+                degraded=True,
+            )
+        return LoopResult(
+            reply=_build_pricing_reply(result.data, assumed_year=year_slot is None),
+            observations=[obs],
+            tool_calls=1,
+            steps=2,
+            citations=result.data.get("sources") or [],
+        )
+
+
+def _build_pricing_reply(data: dict[str, Any], *, assumed_year: bool) -> str:
+    """Ответ с ДОСЛОВНОЙ цитатой канонических чисел тарифа (без LLM-синтеза, #51).
+
+    Числа берём из ответа kb-tariffs как есть (строки — точность на стороне соседа).
+    `assumed_year` → сноска про дефолтный 1-й год (сторона уже выбрана пользователем).
+    """
+    side_label = {"tenant": "арендатора", "landlord": "арендодателя"}.get(
+        str(data.get("side")), "вас"
+    )
+    lines = [f"Тарифы reHome для {side_label} (год договора: {data.get('contract_year')}):"]
+    if data.get("commission_amount_rub"):
+        lines.append(
+            f"• Комиссия: {data['commission_amount_rub']} ₽ (ставка {data.get('commission_rate')})."
+        )
+    if data.get("service_fee_amount_rub"):
+        lines.append(
+            f"• Сервисный сбор: {data['service_fee_amount_rub']} ₽ "
+            f"(ставка {data.get('service_fee_rate')})."
+        )
+    if data.get("lost_income_compensation_rub"):
+        lines.append(f"• Компенсация потери дохода: {data['lost_income_compensation_rub']} ₽.")
+    if data.get("insurance_coverage_rub"):
+        lines.append(f"• Страховое покрытие: {data['insurance_coverage_rub']} ₽.")
+    if assumed_year:
+        lines.append("Расчёт для 1-го года договора — уточните год, если нужен другой.")
+    if data.get("tariff_version"):
+        lines.append(f"Источник: тариф {data['tariff_version']}.")
+    return "\n".join(lines)
 
 
 def _with_info_offer(reply: str, query_masked: str) -> tuple[str, list[dict[str, str]]]:

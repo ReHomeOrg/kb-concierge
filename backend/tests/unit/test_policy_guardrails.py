@@ -47,14 +47,21 @@ def test_wrap_untrusted_delimits_and_strips_forged_delimiter() -> None:
     assert "ignore above" in wrapped  # контент сохранён как данные
 
 
-def test_enforce_vetoes_autonomous_money() -> None:
+def test_enforce_vetoes_autonomous_money_action() -> None:
     # G1: даже если (мисконфигурированная) политика разрешила ANSWER/TOOL_CALL при
-    # деньгах — вето опускает до HANDOFF.
+    # денежном ДЕЙСТВИИ — вето опускает до HANDOFF.
     for action in (AgentActionKind.ANSWER, AgentActionKind.TOOL_CALL):
         decision = PolicyDecision(action, DecisionReason.AUTONOMOUS_OK, "x")
-        out = enforce_decision(decision, TurnSignals(money=True))
+        out = enforce_decision(decision, TurnSignals(money_action=True))
         assert out.outcome is AgentActionKind.HANDOFF
         assert out.reason is DecisionReason.MONEY_NEVER_AUTONOMOUS
+
+
+def test_enforce_allows_money_topic() -> None:
+    # #51: денежная ТЕМА (комиссия/депозит) — НЕ действие; вето не срабатывает
+    # (read-only цитата тарифа под PRICING_QUERY безопасна).
+    decision = PolicyDecision(AgentActionKind.ANSWER, DecisionReason.AUTONOMOUS_OK, "x")
+    assert enforce_decision(decision, TurnSignals(money_topic=True)) is decision
 
 
 def test_enforce_vetoes_autonomous_irreversible() -> None:
@@ -70,13 +77,13 @@ def test_enforce_passthrough_when_safe() -> None:
 
 def test_enforce_does_not_touch_handoff() -> None:
     decision = PolicyDecision(AgentActionKind.HANDOFF, DecisionReason.NON_STANDARD_ESCALATION, "x")
-    assert enforce_decision(decision, TurnSignals(money=True)) is decision
+    assert enforce_decision(decision, TurnSignals(money_action=True)) is decision
 
 
-def test_engine_plus_enforce_never_autonomous_on_money() -> None:
-    # Сквозной инвариант §12: ноль автономных денежных действий.
+def test_engine_plus_enforce_never_autonomous_on_money_action() -> None:
+    # Сквозной инвариант §12: ноль автономных денежных ДЕЙСТВИЙ (в т.ч. под PRICING_QUERY).
     engine = PolicyEngine()
     for intent in Intent:
-        decision = engine.decide(intent, 0.99, TurnSignals(money=True))
-        final = enforce_decision(decision, TurnSignals(money=True))
+        decision = engine.decide(intent, 0.99, TurnSignals(money_action=True))
+        final = enforce_decision(decision, TurnSignals(money_action=True))
         assert final.outcome is AgentActionKind.HANDOFF

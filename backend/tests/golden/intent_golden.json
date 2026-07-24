@@ -15,6 +15,9 @@
     {"text": "Оказано некачественно, недоволен", "intent": "SUPPORT_ISSUE"},
     {"text": "Здравствуйте!", "intent": "SMALL_TALK"},
     {"text": "Спасибо большое", "intent": "SMALL_TALK"},
+    {"text": "Какая у вас комиссия?", "intent": "PRICING_QUERY"},
+    {"text": "Сколько стоит ваша услуга?", "intent": "PRICING_QUERY"},
+    {"text": "Какой сервисный сбор при аренде?", "intent": "PRICING_QUERY"},
     {"text": "Расскажи анекдот про кота", "intent": "OUT_OF_SCOPE"}
   ]
 }
