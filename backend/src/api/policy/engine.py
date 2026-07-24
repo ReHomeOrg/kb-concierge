@@ -54,8 +54,12 @@ class PolicyEngine:
             return PolicyDecision(AgentActionKind.HANDOFF, reason, version)
 
         # --- Жёсткие стоп-сигналы (приоритет над матрицей, деградация в безопасность) ---
-        # G1: деньги/выплаты — никогда автономно.
-        if signals.money:
+        # G1: денежное ДЕЙСТВИЕ (транзакция) — никогда автономно.
+        if signals.money_action:
+            return handoff(DecisionReason.MONEY_NEVER_AUTONOMOUS)
+        # Денежная ТЕМА (комиссия/депозит) — HANDOFF, КРОМЕ тарифного вопроса (#51): там
+        # доступен только read-only pricing.quote (детерминир. цитата, денег не двигает).
+        if signals.money_topic and intent is not Intent.PRICING_QUERY:
             return handoff(DecisionReason.MONEY_NEVER_AUTONOMOUS)
         # Претензия/спор/гарантия — обязательный human-handoff (§7.1).
         if signals.claim_or_dispute:

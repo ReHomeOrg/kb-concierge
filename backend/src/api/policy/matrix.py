@@ -13,7 +13,7 @@ from api.intent.enums import Intent
 from api.policy.enums import AgentActionKind
 
 #: Версия встроенной матрицы (меняется при правке правил автономности).
-POLICY_VERSION = "1.0"
+POLICY_VERSION = "1.1"
 
 
 @dataclass(frozen=True)
@@ -58,6 +58,15 @@ DEFAULT_MATRIX: dict[Intent, IntentRule] = {
     Intent.STATUS_QUERY: IntentRule(
         autonomous=AgentActionKind.ANSWER,
         allowed_tools=("partners.get_status", "support.get_status"),
+        gated_by_confidence=False,
+    ),
+    # Тарифный вопрос (#51) — read-only детерминированный расчёт (pricing.quote): агент
+    # цитирует канонические числа дословно. Без подтверждения (необратимого действия/
+    # оплаты нет, G1) и без порога (read-only). Денежная ТЕМА разрешена только этому
+    # интенту (см. policy/engine money_topic).
+    Intent.PRICING_QUERY: IntentRule(
+        autonomous=AgentActionKind.ANSWER,
+        allowed_tools=("pricing.quote",),
         gated_by_confidence=False,
     ),
     # Нестандарт — агент не решает сам (всегда эскалация).

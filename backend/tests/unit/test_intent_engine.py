@@ -5,10 +5,11 @@ rules→LLM, деградация при инертном/падающем пр�
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 
 import pytest
 
-from api.intent.engine import RULES_VERSION, IntentClassifier
+from api.intent.engine import RULES_VERSION, IntentClassifier, extract_pricing_slots
 from api.intent.enums import Intent
 from api.intent.provider import LLMIntent, NullLLMProvider
 
@@ -43,6 +44,8 @@ class _Case:
         _Case("Нужна уборка квартиры", Intent.PARTNER_SERVICE),
         _Case("Хочу пожаловаться на качество", Intent.SUPPORT_ISSUE),
         _Case("Здравствуйте!", Intent.SMALL_TALK),
+        _Case("Какая у вас комиссия?", Intent.PRICING_QUERY),
+        _Case("Сколько стоит ваша услуга?", Intent.PRICING_QUERY),
     ],
 )
 async def test_rules_single_match_high_confidence(case: _Case) -> None:
@@ -58,6 +61,27 @@ async def test_partner_slots_category_and_area() -> None:
     assert out.intent is Intent.PARTNER_SERVICE
     assert out.slots["category"] == "CLEANING"
     assert out.slots["area_sqm"] == 60
+
+
+async def test_extract_pricing_slots_full() -> None:
+    slots = extract_pricing_slots("Я арендатор, аренда 50000 ₽, второй год")
+    assert slots["rent_amount_rub"] == Decimal("50000")
+    assert slots["contract_year"] == 2
+    assert slots["side"] == "tenant"
+
+
+async def test_extract_pricing_slots_thousands_and_landlord() -> None:
+    slots = extract_pricing_slots("Я сдаю квартиру за 60 тыс")
+    assert slots["rent_amount_rub"] == Decimal("60000")
+    assert slots["side"] == "landlord"
+    assert "contract_year" not in slots  # год не указан → дефолт решает loop
+
+
+async def test_extract_pricing_slots_side_not_inferred_when_ambiguous() -> None:
+    # Ни арендатора, ни арендодателя явно → сторону не угадываем (спросим).
+    slots = extract_pricing_slots("сколько стоит аренда 40000")
+    assert "side" not in slots
+    assert slots["rent_amount_rub"] == Decimal("40000")
 
 
 async def test_no_match_without_llm_is_out_of_scope() -> None:

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-# Деньги/выплаты — действие с финансовыми последствиями (G1: никогда автономно).
-_MONEY = (
+# Денежное ДЕЙСТВИЕ — транзакция с финансовыми последствиями (G1: никогда автономно,
+# всегда HANDOFF, в т.ч. вето defense-in-depth). Отделено от денежной ТЕМЫ (#51).
+_MONEY_ACTION = (
     "оплат",
     "перевод денег",
     "перечисл",
@@ -18,9 +19,14 @@ _MONEY = (
     "верните деньги",
     "вернуть деньги",
     "возврат денег",
-    "комисси",
     "предоплат",
     "счёт на оплату",
+)
+# Денежная ТЕМА (номинальные слова, #51): упоминание денежной сущности без транзакции.
+# Не действие → под PRICING_QUERY допустимо (read-only цитата тарифа); прочие интенты →
+# HANDOFF как раньше. Вето defense-in-depth ключится на `money_action`, не на тему.
+_MONEY_TOPIC = (
+    "комисси",
     "депозит",
 )
 # Претензия/спор/гарантия — обязательный human-handoff (§7.1).
@@ -51,12 +57,23 @@ _SENSITIVE = ("суд", "юрист", "иск ", "неустойк", "штраф
 
 @dataclass(frozen=True)
 class TurnSignals:
-    """Жёсткие сигналы хода, влияющие на решение независимо от намерения."""
+    """Жёсткие сигналы хода, влияющие на решение независимо от намерения.
 
-    money: bool = False
+    `money_action` — денежная транзакция (всегда HANDOFF, G1). `money_topic` — упоминание
+    денежной сущности без транзакции (комиссия/депозит): HANDOFF везде, кроме PRICING_QUERY
+    (там read-only цитата тарифа безопасна). `money` — их дизъюнкция (для трассы/совместимости).
+    """
+
+    money_action: bool = False
+    money_topic: bool = False
     claim_or_dispute: bool = False
     irreversible: bool = False
     sensitive: bool = False
+
+    @property
+    def money(self) -> bool:
+        """Любое упоминание денег (действие ИЛИ тема). Совместимость трассы/чтения."""
+        return self.money_action or self.money_topic
 
 
 def _any(text: str, needles: tuple[str, ...]) -> bool:
@@ -67,7 +84,8 @@ def extract_signals(masked_text: str) -> TurnSignals:
     """Извлечь сигналы из маскированного текста (G3)."""
     text = masked_text.lower()
     return TurnSignals(
-        money=_any(text, _MONEY),
+        money_action=_any(text, _MONEY_ACTION),
+        money_topic=_any(text, _MONEY_TOPIC),
         claim_or_dispute=_any(text, _CLAIM),
         irreversible=_any(text, _IRREVERSIBLE),
         sensitive=_any(text, _SENSITIVE),

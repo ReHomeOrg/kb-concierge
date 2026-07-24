@@ -14,6 +14,15 @@ def test_from_policy_none_rules_uses_defaults() -> None:
     assert m.rule_for(Intent.INFO_QA).autonomous is AgentActionKind.ANSWER
 
 
+def test_pricing_query_rule_is_read_only_answer() -> None:
+    # #51: тарифный вопрос — ANSWER через pricing.quote, без подтверждения/порога.
+    rule = DEFAULT_MATRIX[Intent.PRICING_QUERY]
+    assert rule.autonomous is AgentActionKind.ANSWER
+    assert rule.allowed_tools == ("pricing.quote",)
+    assert rule.requires_confirmation is False
+    assert rule.gated_by_confidence is False
+
+
 def test_from_policy_overrides_rule() -> None:
     m = AutonomyMatrix.from_policy(
         confidence_threshold=0.7,

@@ -14,13 +14,14 @@ from __future__ import annotations
 import datetime
 import re
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 
 from api.intent.enums import Intent
 from api.intent.provider import LLMProvider
 
 #: Версия набора правил (трассируемость, FR-5.4). Меняется при правке ключевых слов.
-RULES_VERSION = "1.0"
+RULES_VERSION = "1.1"
 _RULES_MODEL = "rules"
 _RULES_CONFIDENCE = 0.9
 _AMBIGUOUS_CONFIDENCE = 0.4
@@ -101,6 +102,23 @@ _KEYWORDS: dict[Intent, tuple[str, ...]] = {
     ),
     Intent.PARTNER_SERVICE: PARTNER_SERVICE_KEYWORDS,
     Intent.STATUS_QUERY: _STATUS_KEYWORDS,
+    # Тарифный вопрос (#51): канонические числа считает pricing.quote (kb-tariffs), не RAG.
+    # Стеммы конкретнее INFO_QA («услови»/«договор») — разводят с общим инфо-вопросом.
+    Intent.PRICING_QUERY: (
+        "сколько стоит",
+        "сколько будет стоить",
+        "сколько возьм",
+        "сколько берёт",
+        "сколько берете",
+        "комисси",
+        "тариф",
+        "стоимость услуг",
+        "сервисный сбор",
+        "какая ставка",
+        "во сколько обойд",
+        "почём",
+        "почем",
+    ),
     Intent.SUPPORT_ISSUE: (
         "жалоб",
         "пожаловат",
@@ -135,6 +153,80 @@ _KEYWORDS: dict[Intent, tuple[str, ...]] = {
 }
 
 _AREA_RE = re.compile(r"(\d+)\s*(?:м2|м²|кв\.?\s*м)", re.IGNORECASE)
+
+# --- Слоты тарифного вопроса (#51, PRICING_QUERY): сумма аренды, год договора, сторона.
+# Извлекаются из МАСКИ (G3) детерминированно. `side` НЕ инферим (решение Архитектора:
+# сторона всегда уточняется явно) — извлекаем ТОЛЬКО при однозначном самоназывании.
+# Сумма «тыс/т.р/к» → ×1000; «руб/₽» или ≥4 цифр подряд → как есть.
+_RENT_THOUSANDS_RE = re.compile(r"(\d[\d\s]*)\s*(?:тыс|т\.?\s*р|к\b)", re.IGNORECASE)
+_RENT_RUB_RE = re.compile(r"(\d[\d\s]{2,})\s*(?:₽|руб|р\.)", re.IGNORECASE)
+_RENT_BARE_RE = re.compile(r"\b(\d{4,})\b")
+_YEAR_RE = re.compile(r"(\d+)\s*(?:-?[а-я]*\s*)?год", re.IGNORECASE)
+_YEAR_WORDS: dict[str, int] = {
+    "перв": 1, "втор": 2, "трет": 3, "четвёрт": 4, "четверт": 4, "пят": 5
+}
+# Однозначное самоназывание стороны (без догадок): арендатор/наниматель vs арендодатель.
+_SIDE_TENANT = ("арендатор", "я снима", "хочу снят", "как жилец", "как наниматель", "наниматель")
+_SIDE_LANDLORD = (
+    "арендодател", "я сдаю", "хочу сдат", "как собственник", "как владелец", "наймодател"
+)
+
+
+def _parse_rent(text: str) -> Decimal | None:
+    """Ежемесячная аренда из текста (маска). Приоритет: тыс/к → руб/₽ → голое ≥4 цифр."""
+    m = _RENT_THOUSANDS_RE.search(text)
+    if m is not None:
+        return Decimal(re.sub(r"\s", "", m.group(1))) * 1000
+    m = _RENT_RUB_RE.search(text)
+    if m is not None:
+        return Decimal(re.sub(r"\s", "", m.group(1)))
+    m = _RENT_BARE_RE.search(text)
+    if m is not None:
+        return Decimal(m.group(1))
+    return None
+
+
+def _parse_side(text: str) -> str | None:
+    """Сторона сделки ТОЛЬКО при однозначном самоназывании; иначе None (уточним явно)."""
+    tenant = any(kw in text for kw in _SIDE_TENANT)
+    landlord = any(kw in text for kw in _SIDE_LANDLORD)
+    if tenant and not landlord:
+        return "tenant"
+    if landlord and not tenant:
+        return "landlord"
+    return None
+
+
+def _parse_contract_year(text: str) -> int | None:
+    """Год договора (число или «первый/второй/третий … год»); нет → None (дефолт у loop)."""
+    m = _YEAR_RE.search(text)
+    if m is not None:
+        year = int(m.group(1))
+        if 1 <= year <= 50:
+            return year
+    for stem, year in _YEAR_WORDS.items():
+        if stem in text and "год" in text:
+            return year
+    return None
+
+
+def extract_pricing_slots(masked_text: str) -> dict[str, Any]:
+    """Слоты тарифного вопроса из маски (#51): rent_amount_rub / contract_year / side.
+
+    Детерминированно, без ПДн. Отсутствующие ключи не кладём (loop решает уточнение/дефолт).
+    """
+    text = masked_text.lower()
+    slots: dict[str, Any] = {}
+    rent = _parse_rent(text)
+    if rent is not None:
+        slots["rent_amount_rub"] = rent
+    year = _parse_contract_year(text)
+    if year is not None:
+        slots["contract_year"] = year
+    side = _parse_side(text)
+    if side is not None:
+        slots["side"] = side
+    return slots
 
 
 @dataclass(frozen=True)
@@ -202,6 +294,10 @@ def _extract_slots(text: str, intent: Intent) -> dict[str, Any]:
         best = max(cat_scores, key=lambda c: cat_scores[c])
         if cat_scores[best] > 0:
             slots["category"] = best
+    if intent is Intent.PRICING_QUERY:
+        # Слоты тарифа в трассу (#51); Decimal→строка для JSON-сериализуемости.
+        for key, value in extract_pricing_slots(text).items():
+            slots[key] = str(value) if isinstance(value, Decimal) else value
     return slots
 
 

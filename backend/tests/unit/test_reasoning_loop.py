@@ -286,3 +286,102 @@ async def test_small_talk_reply() -> None:
         decision=decision, intent=Intent.SMALL_TALK, query_masked="привет", context=_CTX
     )
     assert "помочь" in out.reply.lower()
+
+
+class _FakePricingTool:
+    name = "pricing.quote"
+    description = "fake"
+
+    def __init__(self, result: ToolResult) -> None:
+        self._result = result
+        self.calls = 0
+        self.last_payload: dict[str, Any] = {}
+
+    async def run(self, payload: Mapping[str, Any], context: ToolContext) -> ToolResult:
+        self.calls += 1
+        self.last_payload = dict(payload)
+        return self._result
+
+
+def _pricing_decision() -> PolicyDecision:
+    return PolicyDecision(
+        AgentActionKind.ANSWER,
+        DecisionReason.AUTONOMOUS_OK,
+        "1.1",
+        allowed_tools=("pricing.quote",),
+    )
+
+
+def _quote_data() -> dict[str, Any]:
+    return {
+        "tariff_version": "2026.1",
+        "side": "tenant",
+        "contract_year": 1,
+        "commission_rate": "0.035",
+        "commission_amount_rub": "3500",
+        "service_fee_rate": "0.20",
+        "service_fee_amount_rub": "20000",
+        "lost_income_compensation_rub": "150000",
+        "insurance_coverage_rub": "600000",
+        "sources": [{"title": "Канон", "ref": "tariff:2026.1"}],
+    }
+
+
+async def test_pricing_quote_verbatim_numbers() -> None:
+    # #51 (закрывает пробел PR #46): полные слоты → pricing.quote → дословная цитата чисел.
+    tool = _FakePricingTool(ToolResult(data=_quote_data()))
+    out = await _loop(tool).run(
+        decision=_pricing_decision(),
+        intent=Intent.PRICING_QUERY,
+        query_masked="я арендатор, аренда 100000",
+        context=_CTX,
+    )
+    assert tool.calls == 1
+    assert tool.last_payload == {"rent_amount_rub": "100000", "contract_year": 1, "side": "tenant"}
+    # Числа процитированы дословно (без синтеза), с источником.
+    assert "3500" in out.reply
+    assert "20000" in out.reply
+    assert "600000" in out.reply
+    assert out.citations == [{"title": "Канон", "ref": "tariff:2026.1"}]
+    assert out.tool_calls == 1
+
+
+async def test_pricing_missing_side_clarifies() -> None:
+    # Сторона всегда обязательна: нет самоназывания → CLARIFY с тапаемыми вариантами,
+    # инструмент НЕ вызывается.
+    tool = _FakePricingTool(ToolResult(data=_quote_data()))
+    out = await _loop(tool).run(
+        decision=_pricing_decision(),
+        intent=Intent.PRICING_QUERY,
+        query_masked="сколько стоит аренда 100000",
+        context=_CTX,
+    )
+    assert tool.calls == 0
+    assert {"id": "tenant", "label": "Я арендатор"} in out.options
+    assert {"id": "landlord", "label": "Я арендодатель"} in out.options
+
+
+async def test_pricing_default_year_note() -> None:
+    # Год не указан → дефолт 1 + оговорка в ответе; сторона указана.
+    tool = _FakePricingTool(ToolResult(data=_quote_data()))
+    out = await _loop(tool).run(
+        decision=_pricing_decision(),
+        intent=Intent.PRICING_QUERY,
+        query_masked="я арендатор, аренда 100000",
+        context=_CTX,
+    )
+    assert tool.last_payload["contract_year"] == 1
+    assert "1-го года" in out.reply
+
+
+async def test_pricing_unavailable_degrades_no_invented_number() -> None:
+    # Недоступность соседа → деградация, число НЕ выдумываем (FR-6.6, денежный контур).
+    tool = _FakePricingTool(ToolResult(unavailable=True))
+    out = await _loop(tool).run(
+        decision=_pricing_decision(),
+        intent=Intent.PRICING_QUERY,
+        query_masked="я арендатор, аренда 100000",
+        context=_CTX,
+    )
+    assert out.degraded is True
+    assert "недоступ" in out.reply.lower()
