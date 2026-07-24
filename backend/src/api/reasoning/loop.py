@@ -560,9 +560,7 @@ class ReasoningLoop:
                 steps=2,
                 degraded=True,
             )
-        summary = wrap_untrusted(
-            f"pricing.quote: {'unavailable' if result.unavailable else 'ok'}"
-        )
+        summary = wrap_untrusted(f"pricing.quote: {'unavailable' if result.unavailable else 'ok'}")
         obs = Observation(tool=_PRICING_QUOTE, unavailable=result.unavailable, summary=summary)
         # Битый/неполный тариф соседа → деградация (не цитируем пустое, FR-6.5/6.6).
         if result.unavailable or not result.data.get("tariff_version"):
