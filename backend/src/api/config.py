@@ -137,6 +137,11 @@ class Settings(BaseSettings):
     # через OAuth2 по ADR). ПУСТОЙ base_url → инструмент инертен/деградирует. ---
     kb_search_api_base_url: str = Field(default="", description="Base URL kb-search (RAG).")
     kb_search_api_token: str = Field(default="", description="Fallback-токен kb-search (dev).")
+
+    # --- kb-tariffs: авторитетный сервис канонических тарифов (числа не хардкодим).
+    # Пусто → инструмент tariffs.quote НЕ регистрируется (Null-деградация, config-gated). ---
+    tariffs_base_url: str = Field(default="", description="Base URL сервиса kb-tariffs.")
+    tariffs_token: str = Field(default="", description="Bearer m2m к kb-tariffs (из kb-vault).")
     # K-4 #15: RAG-ответ (синтез) через chat-роут kb-search. ПО УМОЛЧАНИЮ ВЫКЛ — INFO_QA
     # отвечает детерминированно цитатами kb.search; включение даёт LLM-синтез (kb.answer).
     kb_rag_answer_enabled: bool = Field(

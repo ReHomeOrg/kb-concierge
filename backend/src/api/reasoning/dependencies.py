@@ -25,6 +25,7 @@ from api.clients.support.adapter import HttpKbSupportClient
 from api.config import Settings, get_settings
 from api.reasoning.limits import Limits
 from api.reasoning.loop import ReasoningLoop
+from api.tariffs import build_tariffs_http, build_tariffs_provider
 from api.tools.chat_answer import KbAnswerTool
 from api.tools.partners import (
     PartnersClassifyTool,
@@ -40,6 +41,7 @@ from api.tools.support import (
     SupportCreateTicketTool,
     SupportGetStatusTool,
 )
+from api.tools.tariffs import TariffsQuoteTool
 
 # Кеш read-only ответов соседей — процесс-синглтон (переживает запросы).
 _TOOL_CACHE = InMemoryCache(now=time.monotonic)
@@ -113,6 +115,8 @@ async def get_reasoning_loop() -> AsyncIterator[ReasoningLoop]:
             await _register_support_tools(stack, registry, settings)
         if settings.kb_partners_api_base_url:
             await _register_partners_tools(stack, registry, settings)
+        if settings.tariffs_base_url and settings.tariffs_token:
+            await _register_tariffs_tool(stack, registry, settings)
         yield ReasoningLoop(
             registry, Limits.from_settings(settings), rag_answer=settings.kb_rag_answer_enabled
         )
@@ -161,3 +165,11 @@ async def _register_partners_tools(
     registry.register(PartnersClassifyTool(client))
     registry.register(PartnersDispatchTool(client))
     registry.register(PartnersGetStatusTool(client))
+
+
+async def _register_tariffs_tool(
+    stack: AsyncExitStack, registry: ToolRegistry, settings: Settings
+) -> None:
+    """Read-only tariffs.quote (KAG L2): канонические числа из kb-tariffs, config-gated."""
+    http = await stack.enter_async_context(build_tariffs_http(settings))
+    registry.register(TariffsQuoteTool(build_tariffs_provider(settings, http)))
