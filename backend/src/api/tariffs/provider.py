@@ -14,7 +14,9 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Protocol
 
-import httpx
+from api.clients.auth import TokenProvider
+from api.clients.base import ResilientHttpClient
+from api.clients.errors import ExternalServiceError
 
 logger = logging.getLogger(__name__)
 
@@ -50,25 +52,36 @@ class NullTariffsProvider:
 
 
 class HttpTariffsProvider:
-    """Боевой провайдер: POST /pricing/quote к kb-tariffs. Сбой/недоступность/4xx → None
-    (не роняем поток; агент уточняет/не котирует). Контракт изолирован здесь."""
+    """Боевой провайдер: POST /pricing/quote к kb-tariffs поверх `ResilientHttpClient`
+    (timeout→breaker→retry, NFR-9 — паритет с соседями). Сбой/недоступность/4xx → None
+    (не роняем поток; агент уточняет/не котирует). Контракт изолирован здесь.
 
-    def __init__(self, http: httpx.AsyncClient) -> None:
-        self._http = http
+    Токен — m2m сервис-принципала (расчёт тарифа НЕ зависит от прав пользователя, G7:
+    делегирование не нужно), получается per-request через `TokenProvider` с aud=kb-tariffs.
+    """
+
+    def __init__(self, *, http_client: ResilientHttpClient, token_provider: TokenProvider) -> None:
+        self._http = http_client
+        self._token = token_provider
 
     async def quote(
         self, *, rent_amount_rub: Decimal, contract_year: int, side: str
     ) -> Quote | None:
         try:
-            resp = await self._http.post(
+            # Токен — внутри try: сбой его получения деградирует в None, а не валит ход (G6).
+            headers = {"Authorization": f"Bearer {await self._token.get_token(on_behalf_of=None)}"}
+            resp = await self._http.request(
+                "POST",
                 _QUOTE_PATH,
+                operation="quote",
                 json={
                     "rent_amount_rub": str(rent_amount_rub),
                     "contract_year": contract_year,
                     "side": side,
                 },
+                headers=headers,
             )
-        except httpx.HTTPError:
+        except ExternalServiceError:
             logger.warning("kbc.tariffs_quote_transport", extra={"side": side})
             return None
         if resp.status_code >= 400:

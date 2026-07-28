@@ -118,6 +118,9 @@ class Settings(BaseSettings):
     oauth_audience_platform: str = Field(
         default="rehome-platform", description="aud для rehome-platform."
     )
+    oauth_audience_kb_tariffs: str = Field(
+        default="kb-tariffs", description="aud для kb-tariffs (m2m, без делегирования)."
+    )
 
     # --- HTTP-клиенты к соседям-инструментам (resilience). Базовые URL — по мере
     # подключения инструментов (M3+). Параметры устойчивости общие (NFR-9). ---
