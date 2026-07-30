@@ -41,10 +41,35 @@ def _reader(handler: Any) -> PlatformStatusReader:
 
 
 def test_map_owner() -> None:
+    # egrn/payout отсутствуют в базовом payload → done.get(...)=False (гид доведёт).
     assert _map("owner", _OWNER_RESP) == {
         "account": True,
         "kyc_passed": True,
         "object_added": False,
+        "egrn_verified": False,
+        "payout_saved": False,
+    }
+
+
+def test_map_owner_extended_egrn_payout() -> None:
+    # extended-payload платформы (контракт #16): egrn/payout приходят → маппятся в флаги.
+    payload = {
+        "role": "landlord",
+        "steps": [
+            {"key": "profile", "done": True},
+            {"key": "phone", "done": True},
+            {"key": "kyc", "done": True},
+            {"key": "property", "done": True},
+            {"key": "egrn", "done": True},
+            {"key": "payout", "done": False},
+        ],
+    }
+    assert _map("owner", payload) == {
+        "account": True,
+        "kyc_passed": True,
+        "object_added": True,
+        "egrn_verified": True,
+        "payout_saved": False,
     }
 
 
@@ -54,7 +79,21 @@ def test_map_tenant_profile_requires_phone() -> None:
         "account": True,
         "profile_complete": False,
         "kyc_passed": False,
+        "solvency_confirmed": False,
     }
+
+
+def test_map_tenant_extended_income() -> None:
+    payload = {
+        "role": "tenant",
+        "steps": [
+            {"key": "profile", "done": True},
+            {"key": "phone", "done": True},
+            {"key": "kyc", "done": True},
+            {"key": "income", "done": True},
+        ],
+    }
+    assert _map("tenant", payload)["solvency_confirmed"] is True
 
 
 def test_map_bad_payload_returns_none() -> None:
@@ -81,7 +120,13 @@ async def test_read_owner_sends_service_request_and_maps() -> None:
         return httpx.Response(200, json=_OWNER_RESP)
 
     out = await _reader(handler).read("owner", ToolContext(on_behalf_of="u-1", email="a@b.com"))
-    assert out == {"account": True, "kyc_passed": True, "object_added": False}
+    assert out == {
+        "account": True,
+        "kyc_passed": True,
+        "object_added": False,
+        "egrn_verified": False,
+        "payout_saved": False,
+    }
 
 
 async def test_read_tenant_without_email_omits_param() -> None:
