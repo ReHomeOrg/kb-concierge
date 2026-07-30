@@ -93,7 +93,9 @@ def test_map_tenant_extended_income() -> None:
             {"key": "income", "done": True},
         ],
     }
-    assert _map("tenant", payload)["solvency_confirmed"] is True
+    out = _map("tenant", payload)
+    assert out is not None
+    assert out["solvency_confirmed"] is True
 
 
 def test_map_bad_payload_returns_none() -> None:
