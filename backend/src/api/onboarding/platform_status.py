@@ -86,9 +86,10 @@ class PlatformStatusReader:
 def _map(role: str, payload: Any) -> Mapping[str, bool] | None:
     """Платформенный OnboardingStatusResponse → `done_flag`-и автомата flow_data.json.
 
-    Флаги за пределами publish-цепочки платформы (owner: egrn_verified/payout_saved;
-    tenant: solvency_confirmed) платформа в onboarding-статусе НЕ отдаёт — они опущены →
-    flow трактует их как незавершённые (гид доведёт до них). Расширение — контракт #16.
+    Полная цепочка (owner: egrn_verified/payout_saved; tenant: solvency_confirmed)
+    приходит из extended-режима internal-эндпоинта платформы (ключи egrn/payout/income,
+    контракт #16). Если платформа их не отдала (старый билд / базовый режим) —
+    `done.get(..., False)` → шаг трактуется как незавершённый, гид доведёт до него.
     """
     if not isinstance(payload, dict):
         return None
@@ -105,10 +106,13 @@ def _map(role: str, payload: Any) -> Mapping[str, bool] | None:
             "account": True,  # запрос аутентифицирован → аккаунт есть
             "kyc_passed": done.get("kyc", False),
             "object_added": done.get("property", False),
+            "egrn_verified": done.get("egrn", False),
+            "payout_saved": done.get("payout", False),
         }
     # tenant: profile-минимум для брони = профиль И телефон подтверждены
     return {
         "account": True,
         "profile_complete": done.get("profile", False) and done.get("phone", False),
         "kyc_passed": done.get("kyc", False),
+        "solvency_confirmed": done.get("income", False),
     }
