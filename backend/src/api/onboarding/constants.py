@@ -18,6 +18,7 @@ FLAG_ACCOUNT = "account"  # сессия/аккаунт создан
 FLAG_EMAIL_VERIFIED = "email_verified"  # e-mail подтверждён (недостающий контакт)
 FLAG_PROFILE_COMPLETE = "profile_complete"  # профиль-минимум заполнен
 FLAG_KYC_PASSED = "kyc_passed"  # верификация личности пройдена
+FLAG_TAX_STATUS_SET = "tax_status_set"  # налоговый статус + ИНН указаны (собственник)
 FLAG_SOLVENCY_CONFIRMED = "solvency_confirmed"  # платёжеспособность подтверждена
 FLAG_OBJECT_ADDED = "object_added"  # объект добавлен
 FLAG_EGRN_VERIFIED = "egrn_verified"  # объект верифицирован (ЕГРН, Контур)

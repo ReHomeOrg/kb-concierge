@@ -52,21 +52,23 @@ def test_complete_tenant() -> None:
 
 
 def test_owner_mid_position() -> None:
-    # account/email/kyc/object завершены → текущий O4 (ЕГРН); порядок O1,O6,O2,O3,O4,O5 → seq=5.
+    # account/email/kyc/tax/object завершены → текущий O4 (ЕГРН);
+    # порядок O1,O6,O2,O7,O3,O4,O5 → seq=6.
     o = outcome_from_status(
         "owner",
         {
             "account": True,
             "email_verified": True,
             "kyc_passed": True,
+            "tax_status_set": True,
             "object_added": True,
             "egrn_verified": False,
         },
     )
     assert o is not None
     assert o.step_id == "O4"
-    assert o.step_seq == 5
-    assert o.done == 4
+    assert o.step_seq == 6
+    assert o.done == 5
 
 
 def test_unknown_role_is_none() -> None:

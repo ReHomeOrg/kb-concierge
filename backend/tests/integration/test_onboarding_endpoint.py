@@ -151,13 +151,14 @@ async def test_onboarding_owner_role_known_status(
             "account": True,
             "email_verified": True,
             "kyc_passed": True,
+            "tax_status_set": True,
             "object_added": True,
             "egrn_verified": False,
         }
     )
     resp = await client.get(f"{_BASE}/{sess.id}/onboarding?role=owner")
     assert resp.status_code == 200
-    assert resp.json()["step_id"] == "O4" and resp.json()["total"] == 6
+    assert resp.json()["step_id"] == "O4" and resp.json()["total"] == 7
 
 
 async def test_onboarding_complete_finale(
