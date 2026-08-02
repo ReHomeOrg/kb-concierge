@@ -63,13 +63,14 @@ def test_complete_is_value_finale() -> None:
 
 def test_owner_path_mode_and_stage() -> None:
     p = build_guide(ROLE_OWNER, None)
-    assert p is not None and p.total == 6 and p.known is False
+    assert p is not None and p.total == 7 and p.known is False
     g = build_guide(
         ROLE_OWNER,
         {
             "account": True,
             "email_verified": True,
             "kyc_passed": True,
+            "tax_status_set": True,
             "object_added": True,
             "egrn_verified": False,
             "payout_saved": False,
@@ -120,10 +121,11 @@ def test_owner_complete_is_value_finale() -> None:
             "account": True,
             "email_verified": True,
             "kyc_passed": True,
+            "tax_status_set": True,
             "object_added": True,
             "egrn_verified": True,
             "payout_saved": True,
         },
     )
     assert g is not None and g.complete is True and g.step_id is None
-    assert "листить" in g.title.lower() and (g.done, g.total) == (6, 6)
+    assert "листить" in g.title.lower() and (g.done, g.total) == (7, 7)

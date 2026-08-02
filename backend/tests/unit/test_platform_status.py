@@ -46,6 +46,7 @@ def test_map_owner() -> None:
         "account": True,
         "email_verified": False,
         "kyc_passed": True,
+        "tax_status_set": False,
         "object_added": False,
         "egrn_verified": False,
         "payout_saved": False,
@@ -61,6 +62,7 @@ def test_map_owner_extended_egrn_payout() -> None:
             {"key": "phone", "done": True},
             {"key": "email", "done": True},
             {"key": "kyc", "done": True},
+            {"key": "requisites", "done": True},
             {"key": "property", "done": True},
             {"key": "egrn", "done": True},
             {"key": "payout", "done": False},
@@ -70,6 +72,7 @@ def test_map_owner_extended_egrn_payout() -> None:
         "account": True,
         "email_verified": True,
         "kyc_passed": True,
+        "tax_status_set": True,
         "object_added": True,
         "egrn_verified": True,
         "payout_saved": False,
@@ -115,6 +118,18 @@ def test_map_email_verified_flag() -> None:
         assert out_absent["email_verified"] is False
 
 
+def test_map_tax_status_set_flag_owner_only() -> None:
+    # Шаг requisites платформы → флаг tax_status_set (только собственник).
+    out = _map("owner", {"role": "owner", "steps": [{"key": "requisites", "done": True}]})
+    assert out is not None and out["tax_status_set"] is True
+    # Отсутствие шага requisites → флаг False (старый билд платформы / базовый режим).
+    out_absent = _map("owner", {"role": "owner", "steps": [{"key": "kyc", "done": True}]})
+    assert out_absent is not None and out_absent["tax_status_set"] is False
+    # Арендатор налоговый флаг не несёт (шаг owner-only).
+    out_tenant = _map("tenant", {"role": "tenant", "steps": [{"key": "requisites", "done": True}]})
+    assert out_tenant is not None and "tax_status_set" not in out_tenant
+
+
 def test_map_bad_payload_returns_none() -> None:
     assert _map("owner", "nope") is None
     assert _map("owner", {"steps": "x"}) is None
@@ -143,6 +158,7 @@ async def test_read_owner_sends_service_request_and_maps() -> None:
         "account": True,
         "email_verified": False,
         "kyc_passed": True,
+        "tax_status_set": False,
         "object_added": False,
         "egrn_verified": False,
         "payout_saved": False,

@@ -48,6 +48,7 @@ def _owner(**flags: bool) -> dict[str, bool]:
         "account": True,
         "email_verified": True,
         "kyc_passed": False,
+        "tax_status_set": False,
         "object_added": False,
         "egrn_verified": False,
         "payout_saved": False,
@@ -96,19 +97,38 @@ def test_prerequisite_guard_never_skips_account() -> None:
 # --- ветка «Собственник» --------------------------------------------------
 
 
+def test_owner_kyc_done_tax_unset_goes_to_requisites() -> None:
+    # После KYC (O2) и до объекта — шаг налогового статуса O7 (requires O2).
+    step = next_step(ROLE_OWNER, _owner(kyc_passed=True))
+    assert step is not None and step.step_id == "O7"
+    assert step.screen_ref == "requisites" and step.done_flag == "tax_status_set"
+
+
+def test_owner_requisites_guarded_before_kyc() -> None:
+    # O7 требует O2 (KYC): без KYC налоговый шаг не предлагается, идём в O2.
+    step = next_step(ROLE_OWNER, _owner(tax_status_set=True))
+    assert step is not None and step.step_id == "O2"
+
+
 def test_owner_object_done_egrn_pending_goes_to_egrn() -> None:
-    step = next_step(ROLE_OWNER, _owner(kyc_passed=True, object_added=True))
+    step = next_step(ROLE_OWNER, _owner(kyc_passed=True, tax_status_set=True, object_added=True))
     assert step is not None and step.step_id == "O4"  # O4 requires O3 (выполнен)
 
 
 def test_owner_egrn_before_object_guarded() -> None:
     # O4 (ЕГРН) требует O3 (объект): без объекта O4 не предлагается, идём в O3.
-    step = next_step(ROLE_OWNER, _owner(kyc_passed=True, payout_saved=True))
+    step = next_step(ROLE_OWNER, _owner(kyc_passed=True, tax_status_set=True, payout_saved=True))
     assert step is not None and step.step_id == "O3"
 
 
 def test_owner_all_done_is_complete() -> None:
-    status = _owner(kyc_passed=True, object_added=True, egrn_verified=True, payout_saved=True)
+    status = _owner(
+        kyc_passed=True,
+        tax_status_set=True,
+        object_added=True,
+        egrn_verified=True,
+        payout_saved=True,
+    )
     assert next_step(ROLE_OWNER, status) is None
     assert is_complete(ROLE_OWNER, status) is True
 
@@ -159,12 +179,12 @@ def test_unknown_role_is_empty_and_not_complete() -> None:
 
 def test_bundled_flow_has_both_roles() -> None:
     assert len(steps_for(ROLE_TENANT)) == 5
-    assert len(steps_for(ROLE_OWNER)) == 6
+    assert len(steps_for(ROLE_OWNER)) == 7
 
 
 def test_load_flows_bundled_valid() -> None:
     flows = load_flows(None)
-    assert len(flows["tenant"]) == 5 and len(flows["owner"]) == 6
+    assert len(flows["tenant"]) == 5 and len(flows["owner"]) == 7
 
 
 def test_load_flows_bad_override_falls_back(tmp_path: Path) -> None:
@@ -241,6 +261,7 @@ def test_bundled_done_flags_match_constants() -> None:
         c.FLAG_EMAIL_VERIFIED,
         c.FLAG_PROFILE_COMPLETE,
         c.FLAG_KYC_PASSED,
+        c.FLAG_TAX_STATUS_SET,
         c.FLAG_SOLVENCY_CONFIRMED,
         c.FLAG_OBJECT_ADDED,
         c.FLAG_EGRN_VERIFIED,
