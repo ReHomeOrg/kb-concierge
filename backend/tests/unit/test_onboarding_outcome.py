@@ -21,6 +21,7 @@ def test_mid_tenant_position() -> None:
         "tenant",
         {
             "account": True,
+            "email_verified": True,
             "profile_complete": True,
             "kyc_passed": False,
             "solvency_confirmed": False,
@@ -28,32 +29,44 @@ def test_mid_tenant_position() -> None:
     )
     assert o is not None
     assert o.step_id == "T3"
-    assert o.step_seq == 3
-    assert o.done == 2
+    assert o.step_seq == 4  # порядок T1,T2,T5,T3,T4 → T3 четвёртый
+    assert o.done == 3
 
 
 def test_complete_tenant() -> None:
     o = outcome_from_status(
         "tenant",
-        {"account": True, "profile_complete": True, "kyc_passed": True, "solvency_confirmed": True},
+        {
+            "account": True,
+            "email_verified": True,
+            "profile_complete": True,
+            "kyc_passed": True,
+            "solvency_confirmed": True,
+        },
     )
     assert o is not None
     assert o.complete is True
     assert o.step_id is None
-    assert o.step_seq == 4  # все 4 шага роли
-    assert o.done == 4
+    assert o.step_seq == 5  # все 5 шагов роли
+    assert o.done == 5
 
 
 def test_owner_mid_position() -> None:
-    # account/kyc/object завершены → текущий O4 (ЕГРН), seq=4, done=3 (5 шагов всего).
+    # account/email/kyc/object завершены → текущий O4 (ЕГРН); порядок O1,O6,O2,O3,O4,O5 → seq=5.
     o = outcome_from_status(
         "owner",
-        {"account": True, "kyc_passed": True, "object_added": True, "egrn_verified": False},
+        {
+            "account": True,
+            "email_verified": True,
+            "kyc_passed": True,
+            "object_added": True,
+            "egrn_verified": False,
+        },
     )
     assert o is not None
     assert o.step_id == "O4"
-    assert o.step_seq == 4
-    assert o.done == 3
+    assert o.step_seq == 5
+    assert o.done == 4
 
 
 def test_unknown_role_is_none() -> None:

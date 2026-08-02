@@ -30,8 +30,11 @@ from api.onboarding.flow import _parse, load_flows
 
 
 def _tenant(**flags: bool) -> dict[str, bool]:
+    # email_verified=True по умолчанию: email-шаг (T5) пройден в baseline, чтобы тесты
+    # фокусировались на остальных шагах; кейсы email-pending выставляют False явно.
     base = {
         "account": True,
+        "email_verified": True,
         "profile_complete": False,
         "kyc_passed": False,
         "solvency_confirmed": False,
@@ -43,6 +46,7 @@ def _tenant(**flags: bool) -> dict[str, bool]:
 def _owner(**flags: bool) -> dict[str, bool]:
     base = {
         "account": True,
+        "email_verified": True,
         "kyc_passed": False,
         "object_added": False,
         "egrn_verified": False,
@@ -113,12 +117,12 @@ def test_owner_all_done_is_complete() -> None:
 
 
 def test_progress_counts() -> None:
-    assert progress(ROLE_TENANT, _tenant()) == (1, 4)  # только account
-    assert progress(ROLE_TENANT, _tenant(profile_complete=True, kyc_passed=True)) == (3, 4)
+    assert progress(ROLE_TENANT, _tenant()) == (2, 5)  # account + email
+    assert progress(ROLE_TENANT, _tenant(profile_complete=True, kyc_passed=True)) == (4, 5)
 
 
 def test_completed_ids_in_order() -> None:
-    assert completed_step_ids(ROLE_TENANT, _tenant(profile_complete=True)) == ("T1", "T2")
+    assert completed_step_ids(ROLE_TENANT, _tenant(profile_complete=True)) == ("T1", "T2", "T5")
 
 
 def test_step_for_blocker_maps_to_fix_step() -> None:
@@ -154,13 +158,13 @@ def test_unknown_role_is_empty_and_not_complete() -> None:
 
 
 def test_bundled_flow_has_both_roles() -> None:
-    assert len(steps_for(ROLE_TENANT)) == 4
-    assert len(steps_for(ROLE_OWNER)) == 5
+    assert len(steps_for(ROLE_TENANT)) == 5
+    assert len(steps_for(ROLE_OWNER)) == 6
 
 
 def test_load_flows_bundled_valid() -> None:
     flows = load_flows(None)
-    assert len(flows["tenant"]) == 4 and len(flows["owner"]) == 5
+    assert len(flows["tenant"]) == 5 and len(flows["owner"]) == 6
 
 
 def test_load_flows_bad_override_falls_back(tmp_path: Path) -> None:
@@ -234,6 +238,7 @@ def test_bundled_done_flags_match_constants() -> None:
 
     known = {
         c.FLAG_ACCOUNT,
+        c.FLAG_EMAIL_VERIFIED,
         c.FLAG_PROFILE_COMPLETE,
         c.FLAG_KYC_PASSED,
         c.FLAG_SOLVENCY_CONFIRMED,

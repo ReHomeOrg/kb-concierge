@@ -77,7 +77,7 @@ async def test_onboarding_enabled_path_mode(
     body = resp.json()
     assert body["known"] is False and body["complete"] is False
     assert body["step_id"] is None
-    assert body["total"] == 4 and len(body["path"]) == 4
+    assert body["total"] == 5 and len(body["path"]) == 5
 
 
 async def test_onboarding_enabled_known_status_asserts_step(
@@ -94,6 +94,7 @@ async def test_onboarding_enabled_known_status_asserts_step(
     app.dependency_overrides[get_onboarding_status_reader] = lambda: _StubReader(
         {
             "account": True,
+            "email_verified": True,
             "profile_complete": True,
             "kyc_passed": False,
             "solvency_confirmed": False,
@@ -103,7 +104,7 @@ async def test_onboarding_enabled_known_status_asserts_step(
     assert resp.status_code == 200
     body = resp.json()
     assert body["known"] is True and body["step_id"] == "T3"
-    assert body["screen_ref"] == "kyc" and body["done"] == 2
+    assert body["screen_ref"] == "kyc" and body["done"] == 3
 
 
 async def test_onboarding_others_session_is_404(
@@ -146,11 +147,17 @@ async def test_onboarding_owner_role_known_status(
     client = make_client(principal)
     app.dependency_overrides[get_session_service] = lambda: _enabled_service(session)
     app.dependency_overrides[get_onboarding_status_reader] = lambda: _StubReader(
-        {"account": True, "kyc_passed": True, "object_added": True, "egrn_verified": False}
+        {
+            "account": True,
+            "email_verified": True,
+            "kyc_passed": True,
+            "object_added": True,
+            "egrn_verified": False,
+        }
     )
     resp = await client.get(f"{_BASE}/{sess.id}/onboarding?role=owner")
     assert resp.status_code == 200
-    assert resp.json()["step_id"] == "O4" and resp.json()["total"] == 5
+    assert resp.json()["step_id"] == "O4" and resp.json()["total"] == 6
 
 
 async def test_onboarding_complete_finale(
@@ -167,6 +174,7 @@ async def test_onboarding_complete_finale(
     app.dependency_overrides[get_onboarding_status_reader] = lambda: _StubReader(
         {
             "account": True,
+            "email_verified": True,
             "profile_complete": True,
             "kyc_passed": True,
             "solvency_confirmed": True,
@@ -175,4 +183,4 @@ async def test_onboarding_complete_finale(
     resp = await client.get(f"{_BASE}/{sess.id}/onboarding?role=tenant")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["complete"] is True and body["step_id"] is None and body["done"] == 4
+    assert body["complete"] is True and body["step_id"] is None and body["done"] == 5
