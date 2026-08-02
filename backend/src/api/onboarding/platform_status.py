@@ -104,6 +104,7 @@ def _map(role: str, payload: Any) -> Mapping[str, bool] | None:
     if role == "owner":
         return {
             "account": True,  # запрос аутентифицирован → аккаунт есть
+            "email_verified": done.get("email", False),
             "kyc_passed": done.get("kyc", False),
             "object_added": done.get("property", False),
             "egrn_verified": done.get("egrn", False),
@@ -112,6 +113,7 @@ def _map(role: str, payload: Any) -> Mapping[str, bool] | None:
     # tenant: profile-минимум для брони = профиль И телефон подтверждены
     return {
         "account": True,
+        "email_verified": done.get("email", False),
         "profile_complete": done.get("profile", False) and done.get("phone", False),
         "kyc_passed": done.get("kyc", False),
         "solvency_confirmed": done.get("income", False),

@@ -44,6 +44,7 @@ def test_map_owner() -> None:
     # egrn/payout отсутствуют в базовом payload → done.get(...)=False (гид доведёт).
     assert _map("owner", _OWNER_RESP) == {
         "account": True,
+        "email_verified": False,
         "kyc_passed": True,
         "object_added": False,
         "egrn_verified": False,
@@ -58,6 +59,7 @@ def test_map_owner_extended_egrn_payout() -> None:
         "steps": [
             {"key": "profile", "done": True},
             {"key": "phone", "done": True},
+            {"key": "email", "done": True},
             {"key": "kyc", "done": True},
             {"key": "property", "done": True},
             {"key": "egrn", "done": True},
@@ -66,6 +68,7 @@ def test_map_owner_extended_egrn_payout() -> None:
     }
     assert _map("owner", payload) == {
         "account": True,
+        "email_verified": True,
         "kyc_passed": True,
         "object_added": True,
         "egrn_verified": True,
@@ -77,6 +80,7 @@ def test_map_tenant_profile_requires_phone() -> None:
     # phone.done=False → profile_complete=False (профиль-минимум = профиль И телефон).
     assert _map("tenant", _TENANT_RESP) == {
         "account": True,
+        "email_verified": False,
         "profile_complete": False,
         "kyc_passed": False,
         "solvency_confirmed": False,
@@ -96,6 +100,19 @@ def test_map_tenant_extended_income() -> None:
     out = _map("tenant", payload)
     assert out is not None
     assert out["solvency_confirmed"] is True
+
+
+def test_map_email_verified_flag() -> None:
+    # Шаг email платформы → флаг email_verified для обеих ролей (гид доводит до подтверждения).
+    for role in ("owner", "tenant"):
+        payload = {"role": role, "steps": [{"key": "email", "done": True}]}
+        out = _map(role, payload)
+        assert out is not None
+        assert out["email_verified"] is True
+        # Отсутствие шага email → флаг False (старый билд платформы / базовый режим).
+        out_absent = _map(role, {"role": role, "steps": [{"key": "kyc", "done": False}]})
+        assert out_absent is not None
+        assert out_absent["email_verified"] is False
 
 
 def test_map_bad_payload_returns_none() -> None:
@@ -124,6 +141,7 @@ async def test_read_owner_sends_service_request_and_maps() -> None:
     out = await _reader(handler).read("owner", ToolContext(on_behalf_of="u-1", email="a@b.com"))
     assert out == {
         "account": True,
+        "email_verified": False,
         "kyc_passed": True,
         "object_added": False,
         "egrn_verified": False,
