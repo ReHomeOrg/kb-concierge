@@ -4,20 +4,139 @@
     "tenant": {
       "goal": "готов бронировать",
       "steps": [
-        {"step_id": "T1", "target_action": "Аккаунт (регистрация/вход)", "screen_ref": "auth", "requires": [], "done_flag": "account", "blocker_reason": null, "title": "Создайте аккаунт", "why": "С аккаунта начинается бронирование."},
-        {"step_id": "T2", "target_action": "Профиль-минимум (поля для брони)", "screen_ref": "profile_min", "requires": ["T1"], "done_flag": "profile_complete", "blocker_reason": "TENANT_PROFILE_INCOMPLETE", "title": "Заполните профиль", "why": "Нужны минимальные данные, чтобы оформить бронь."},
-        {"step_id": "T3", "target_action": "Верификация личности (KYC)", "screen_ref": "kyc", "requires": ["T1"], "done_flag": "kyc_passed", "blocker_reason": null, "title": "Подтвердите личность", "why": "Верификация защищает обе стороны сделки. Данные хранятся в РФ, зашифрованы."},
-        {"step_id": "T4", "target_action": "Справка о доходе", "screen_ref": "income_cert", "requires": ["T1"], "done_flag": "solvency_confirmed", "blocker_reason": "SOLVENCY_NOT_CONFIRMED", "title": "Подтвердите доход", "why": "Справка подтверждает платёжеспособность для брони."}
+        {
+          "step_id": "T1",
+          "target_action": "Аккаунт (регистрация/вход)",
+          "screen_ref": "auth",
+          "requires": [],
+          "done_flag": "account",
+          "blocker_reason": null,
+          "title": "Создайте аккаунт",
+          "why": "С аккаунта начинается бронирование."
+        },
+        {
+          "step_id": "T2",
+          "target_action": "Профиль-минимум (поля для брони)",
+          "screen_ref": "profile_min",
+          "requires": [
+            "T1"
+          ],
+          "done_flag": "profile_complete",
+          "blocker_reason": "TENANT_PROFILE_INCOMPLETE",
+          "title": "Заполните профиль",
+          "why": "Нужны минимальные данные, чтобы оформить бронь."
+        },
+        {
+          "step_id": "T5",
+          "target_action": "Подтверждение e-mail",
+          "screen_ref": "email",
+          "requires": [
+            "T1"
+          ],
+          "done_flag": "email_verified",
+          "blocker_reason": null,
+          "title": "Подтвердите e-mail",
+          "why": "Подтверждённая почта нужна для входа и уведомлений о брони."
+        },
+        {
+          "step_id": "T3",
+          "target_action": "Верификация личности (KYC)",
+          "screen_ref": "kyc",
+          "requires": [
+            "T1"
+          ],
+          "done_flag": "kyc_passed",
+          "blocker_reason": null,
+          "title": "Подтвердите личность",
+          "why": "Верификация защищает обе стороны сделки. Данные хранятся в РФ, зашифрованы."
+        },
+        {
+          "step_id": "T4",
+          "target_action": "Справка о доходе",
+          "screen_ref": "income_cert",
+          "requires": [
+            "T1"
+          ],
+          "done_flag": "solvency_confirmed",
+          "blocker_reason": "SOLVENCY_NOT_CONFIRMED",
+          "title": "Подтвердите доход",
+          "why": "Справка подтверждает платёжеспособность для брони."
+        }
       ]
     },
     "owner": {
       "goal": "готов листить объект",
       "steps": [
-        {"step_id": "O1", "target_action": "Аккаунт (регистрация/вход)", "screen_ref": "auth", "requires": [], "done_flag": "account", "blocker_reason": null, "title": "Создайте аккаунт", "why": "С аккаунта начинается размещение объекта."},
-        {"step_id": "O2", "target_action": "KYC собственника", "screen_ref": "kyc", "requires": ["O1"], "done_flag": "kyc_passed", "blocker_reason": "OWNER_KYC_REQUIRED", "title": "Подтвердите личность", "why": "Верификация собственника защищает арендаторов. Данные хранятся в РФ, зашифрованы."},
-        {"step_id": "O3", "target_action": "Добавить объект (минимум полей)", "screen_ref": "add_object", "requires": ["O1"], "done_flag": "object_added", "blocker_reason": null, "title": "Добавьте объект", "why": "Опишите объект, который хотите сдавать."},
-        {"step_id": "O4", "target_action": "Верификация объекта (ЕГРН, Контур)", "screen_ref": "egrn", "requires": ["O3"], "done_flag": "egrn_verified", "blocker_reason": null, "title": "Верификация объекта", "why": "Проверка по ЕГРН подтверждает право собственности. Может занять до нескольких часов — сообщим по готовности."},
-        {"step_id": "O5", "target_action": "Payout-реквизиты", "screen_ref": "payout", "requires": ["O1"], "done_flag": "payout_saved", "blocker_reason": null, "title": "Реквизиты для выплат", "why": "Куда перечислять арендную плату."}
+        {
+          "step_id": "O1",
+          "target_action": "Аккаунт (регистрация/вход)",
+          "screen_ref": "auth",
+          "requires": [],
+          "done_flag": "account",
+          "blocker_reason": null,
+          "title": "Создайте аккаунт",
+          "why": "С аккаунта начинается размещение объекта."
+        },
+        {
+          "step_id": "O6",
+          "target_action": "Подтверждение e-mail",
+          "screen_ref": "email",
+          "requires": [
+            "O1"
+          ],
+          "done_flag": "email_verified",
+          "blocker_reason": null,
+          "title": "Подтвердите e-mail",
+          "why": "Подтверждённая почта нужна для входа и уведомлений о заявках."
+        },
+        {
+          "step_id": "O2",
+          "target_action": "KYC собственника",
+          "screen_ref": "kyc",
+          "requires": [
+            "O1"
+          ],
+          "done_flag": "kyc_passed",
+          "blocker_reason": "OWNER_KYC_REQUIRED",
+          "title": "Подтвердите личность",
+          "why": "Верификация собственника защищает арендаторов. Данные хранятся в РФ, зашифрованы."
+        },
+        {
+          "step_id": "O3",
+          "target_action": "Добавить объект (минимум полей)",
+          "screen_ref": "add_object",
+          "requires": [
+            "O1"
+          ],
+          "done_flag": "object_added",
+          "blocker_reason": null,
+          "title": "Добавьте объект",
+          "why": "Опишите объект, который хотите сдавать."
+        },
+        {
+          "step_id": "O4",
+          "target_action": "Верификация объекта (ЕГРН, Контур)",
+          "screen_ref": "egrn",
+          "requires": [
+            "O3"
+          ],
+          "done_flag": "egrn_verified",
+          "blocker_reason": null,
+          "title": "Верификация объекта",
+          "why": "Проверка по ЕГРН подтверждает право собственности. Может занять до нескольких часов — сообщим по готовности."
+        },
+        {
+          "step_id": "O5",
+          "target_action": "Payout-реквизиты",
+          "screen_ref": "payout",
+          "requires": [
+            "O1"
+          ],
+          "done_flag": "payout_saved",
+          "blocker_reason": null,
+          "title": "Реквизиты для выплат",
+          "why": "Куда перечислять арендную плату."
+        }
       ]
     }
   }

@@ -93,7 +93,7 @@ async def test_known_status_emits_progress_to_ledger(
     principal = make_principal(PrincipalKind.USER)
     uid = str(principal.user_id)
     sess = await seed_session(user_id=uid)
-    _wire(session, {"account": True, "profile_complete": True}, ledger=True)
+    _wire(session, {"account": True, "email_verified": True, "profile_complete": True}, ledger=True)
 
     resp = await make_client(principal).get(f"{_BASE}/{sess.id}/onboarding?role=tenant")
     assert resp.status_code == 200
@@ -101,10 +101,10 @@ async def test_known_status_emits_progress_to_ledger(
     rec = await _record_for(session, uid)
     assert rec is not None
     assert rec.state == OutcomeState.OPEN
-    assert rec.furthest_step == "T3"  # T1/T2 done → текущий T3
-    assert rec.step_seq == 3
+    assert rec.furthest_step == "T3"  # account/email/profile done → текущий T3
+    assert rec.step_seq == 4  # порядок T1,T2,T5,T3,T4
     assert rec.role == "tenant"
-    assert rec.meta == {"done": 2}
+    assert rec.meta == {"done": 3}
 
 
 async def test_complete_status_emits_completion(
@@ -118,7 +118,13 @@ async def test_complete_status_emits_completion(
     sess = await seed_session(user_id=uid)
     _wire(
         session,
-        {"account": True, "profile_complete": True, "kyc_passed": True, "solvency_confirmed": True},
+        {
+            "account": True,
+            "email_verified": True,
+            "profile_complete": True,
+            "kyc_passed": True,
+            "solvency_confirmed": True,
+        },
         ledger=True,
     )
 
@@ -190,10 +196,10 @@ async def test_repeat_get_is_forward_only_single_record(
     assert r1.status_code == 200  # T1 done → текущий T2
 
     app.dependency_overrides[get_onboarding_status_reader] = lambda: _StubReader(
-        {"account": True, "profile_complete": True}
+        {"account": True, "email_verified": True, "profile_complete": True}
     )
     r2 = await client.get(f"{_BASE}/{sess.id}/onboarding?role=tenant")
-    assert r2.status_code == 200  # T1/T2 done → текущий T3
+    assert r2.status_code == 200  # account/email/profile done → текущий T3
 
     rows = (
         (
@@ -207,7 +213,7 @@ async def test_repeat_get_is_forward_only_single_record(
         .all()
     )
     assert len(rows) == 1  # forward-only: одна OPEN-запись субъекта
-    assert rows[0].step_seq == 3 and rows[0].furthest_step == "T3"
+    assert rows[0].step_seq == 4 and rows[0].furthest_step == "T3"
 
 
 async def test_path_mode_emits_nothing(

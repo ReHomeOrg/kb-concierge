@@ -15,6 +15,7 @@ ONBOARDING_ROLES: frozenset[str] = frozenset({ROLE_TENANT, ROLE_OWNER})
 
 # Статус-флаги завершённости шага (из self-scoped status-reads платформы).
 FLAG_ACCOUNT = "account"  # сессия/аккаунт создан
+FLAG_EMAIL_VERIFIED = "email_verified"  # e-mail подтверждён (недостающий контакт)
 FLAG_PROFILE_COMPLETE = "profile_complete"  # профиль-минимум заполнен
 FLAG_KYC_PASSED = "kyc_passed"  # верификация личности пройдена
 FLAG_SOLVENCY_CONFIRMED = "solvency_confirmed"  # платёжеспособность подтверждена
